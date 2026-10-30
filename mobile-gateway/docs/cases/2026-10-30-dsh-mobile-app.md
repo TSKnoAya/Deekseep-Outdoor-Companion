@@ -618,3 +618,58 @@ adb shell "curl -s -N -m 12 -H 'authorization: Bearer <token>' .../v1/sessions/<
   想清掉就停网关后删 `~/.dsh/mobile-gateway/devices.json`。
 - 配对码是一次性的：我给 App 另发了一个 `POST /v1/devices` 新码（需令牌），
   但**5 分钟有效**，过期只能重启网关重新打。
+
+---
+
+## 15. 2026-10-30 23:09–23:20 真机配对成功后的两个问题
+
+配对本身成功了（网关日志 `15:08:03 新设备配对成功：dev-0e21b2e4d633`），
+但进对话页后发消息报：
+
+```
+DSH 返回错误：Invalid params: unknown session: 7a0b657f-3339-48db-9505-4c02cd886136
+```
+
+同时用户反馈：**底部输入框被系统三大金刚键挡住**。
+
+### 15.1 `unknown session` 的来源
+
+网关每次启动都会 `spawn` 一个**新的 DSH ACP 子进程**。`session/list` 能看到历史会话
+（跨进程可见），但 `session/prompt` 只能用**当前进程**认识的会话。
+而 App 启动时挑了 `sessions.first()` —— 正好是别的进程留下的死会话，于是第一次说话就炸。
+
+两处修法：
+
+| 位置 | 改动 |
+| --- | --- |
+| `loadSessionsAndConnect` | 只认「自己上次用过的那个」`lastSessionId`（且必须在列表里）；**没有就新建**，不再拿 `first()` |
+| `send()` | 捕获 `unknown session` → 自动新建会话 → 用新会话重发一次（用户无感），并把旧消息保留 |
+
+### 15.2 沉浸式全屏（用户明确要求）
+
+`MainActivity.onCreate`：
+
+```kotlin
+WindowCompat.setDecorFitsSystemWindows(window, false)
+WindowInsetsControllerCompat(window, window.decorView).apply {
+    hide(WindowInsetsCompat.Type.systemBars())
+    systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+}
+```
+
+效果：进入 App 即隐藏状态栏与三大金刚键；底部上滑临时浮出，几秒后自动隐藏。
+输入框原有 `imePadding() + navigationBarsPadding()` 保留，键盘弹出时仍会顶上去。
+
+### 15.3 交付方式（这次没让用户手动装）
+
+手机已插 USB 且 `adb` 已授权，直接：
+
+```bash
+adb -s fdcc8f0f install -r -d app-debug.apk   # → Success
+adb shell am start -n com.dsh.mobile/.MainActivity
+```
+
+覆盖安装保留登录态（token 在 EncryptedSharedPreferences 里）。
+
+> 踩坑记录：Git Bash 会把 `adb pull /sdcard/x.png` 的路径改写成 Windows 路径，
+> 必须 `export MSYS_NO_PATHCONV=1`，否则报 `No such file or directory`。

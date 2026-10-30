@@ -168,6 +168,12 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         return msg ?: "${e.javaClass.simpleName}（无错误信息）"
     }
 
+    /** DSH 说「不认识这个会话」——通常是网关重启后会话 id 过期。 */
+    private fun isUnknownSession(e: GatewayException): Boolean {
+        val blob = "${e.error} ${e.hint}".lowercase()
+        return blob.contains("unknown session") || blob.contains("会话不存在")
+    }
+
     fun unpair() {
         sse?.cancel()
         sse = null
@@ -201,8 +207,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 val sessions = c.listSessions()
                 _state.update { it.copy(sessions = sessions) }
+                // 只认「自己上次用过的那个」会话；没有就新建。
+                // 不能拿 sessions.first() —— 列表里可能有别的 DSH 进程留下的会话，
+                // 当前进程不认识它，一发消息就 "unknown session: ..."（真机踩过）。
                 val target = store.lastSessionId?.takeIf { id -> sessions.any { it.sessionId == id } }
-                    ?: sessions.firstOrNull()?.sessionId
                 if (target == null) {
                     createSession()
                 } else {
@@ -373,6 +381,31 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     _state.update { it.copy(queuedNotice = "前面还有 ${r.queued} 条在跑，已排队") }
                 }
             } catch (e: GatewayException) {
+                // 「unknown session」= 这个会话不存在于**当前** DSH 进程里。
+                // 典型场景：网关重启过（DSH 是新进程），而 App 还记着旧会话 id，
+                // 或者会话列表里混进了别的进程留下的会话。
+                // 这种错不该甩给用户，自动新建一个会话再发一次即可。
+                if (isUnknownSession(e)) {
+                    try {
+                        val created = c.createSession(null)
+                        store.lastSessionId = created.sessionId
+                        _state.update { it.copy(sessions = runCatching { c.listSessions() }.getOrDefault(it.sessions), currentSessionId = created.sessionId, messages = emptyList()) }
+                        val r = c.sendMessage(created.sessionId, body)
+                        if (r.queued > 0) {
+                            _state.update { it.copy(queuedNotice = "前面还有 ${r.queued} 条在跑，已排队") }
+                        }
+                        openSession(created.sessionId)
+                        return@launch
+                    } catch (e2: Exception) {
+                        _state.update {
+                            it.copy(
+                                thinking = false,
+                                messages = it.messages + ChatMessage(role = Role.Error, text = e2.message ?: "自动新建会话失败", hint = e2.let { err -> if (err is GatewayException) err.hint else "重试一次；仍然失败看电脑上网关窗口的报错。" }),
+                            )
+                        }
+                        return@launch
+                    }
+                }
                 _state.update {
                     it.copy(
                         thinking = false,

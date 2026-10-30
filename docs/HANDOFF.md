@@ -5,6 +5,41 @@
 
 ---
 
+## 快照：2026-10-30 23:09–23:20（配对成功后的 unknown session + 沉浸式全屏）
+
+### 用户要求
+
+> 「能进入对话界面，但『出错了』，而且对话框被三大金刚键挡住，允许在打开 app 时隐藏它们，屏幕底部上滑才显示」
+
+### 结论
+
+**配对是成功的**（网关日志 `15:08:03 新设备配对成功：dev-0e21b2e4d633`）。
+报错 `Invalid params: unknown session: 7a0b657f…` 的原因：网关每次启动都 spawn 新的
+DSH 子进程，`session/list` 能看到别的进程留下的历史会话，但 `prompt` 只认当前进程的。
+App 启动时挑了 `sessions.first()` → 正好踩中死会话。
+
+### 改了什么
+
+| 修复 | 落点 |
+| --- | --- |
+| 启动时只认自己的 `lastSessionId`，没有就新建（不再取 first） | `ChatViewModel.loadSessionsAndConnect` |
+| 发送遇 `unknown session` → 自动建会话并重发一次（用户无感） | `ChatViewModel.send` + `isUnknownSession()` |
+| 沉浸式全屏：隐藏状态栏/导航栏，上滑临时浮出 | `MainActivity`（WindowInsetsControllerCompat + BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE） |
+| 交付 | `adb install -r -d` 直接装到真机（Success），保留登录态 |
+
+### 已验证
+
+- BUILD SUCCESSFUL；`adb install` 返回 Success；`am start` 已拉起。
+- 网关侧仍活着（8788 LISTENING），DSH 已连接。
+
+### 没验证 / 下一步
+
+- **App 内实际发消息还没复测**（截屏时手机锁屏了，`mCurrentFocus=NotificationShade`，
+  `screencap` 全黑）。需要用户解锁后发一句。
+- 若仍报 unknown session，说明 `isUnknownSession` 的匹配词没覆盖到，看网关日志里的 error 原文补。
+
+---
+
 ## 快照：2026-10-30 23:02–23:10（真机通了：防火墙只放行「专用网络」）
 
 ### 用户要求
