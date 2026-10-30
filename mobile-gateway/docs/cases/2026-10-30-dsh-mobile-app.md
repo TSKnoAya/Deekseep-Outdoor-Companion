@@ -162,7 +162,7 @@ node test/run-all.js --grep 失败
 | 网关 85 条单测 | ✅ 85/85（连跑 3 次均 85/85、0 cancelled，见 §8） |
 | ACP 握手 / 建会话 / 跨进程 list | ✅ 实测通过（前序会话） |
 | `sherpa-onnx.node` 可 require | ✅ 实测 |
-| **ACP `agent_message_chunk` 运行期样本** | ⚠️ **半通**：`node test/e2e-smoke.mjs` 已跑出 `hello → turn_start → turn_end` 真实回合，但 LLM 调用被 DSH 拦下（`llm-deepseek: no API key for provider route "deepseek-official"`），**文本块 0 个**，见 §9 |
+| **ACP `agent_message_chunk` 运行期样本** | ✅ **已通**（2026-10-30 21:5x，见 §11.4：收到 `text` 事件与完整回复）。此前状态：⚠️ 半通：`node test/e2e-smoke.mjs` 已跑出 `hello → turn_start → turn_end` 真实回合，但 LLM 调用被 DSH 拦下（`llm-deepseek: no API key for provider route "deepseek-official"`），**文本块 0 个**，见 §9 |
 | **SenseVoice 实际转写延迟** | ❌ 未验证（模型未下载） |
 | **火山引擎 TTS 真实调用** | ❌ 未实现（用户要求跳过） |
 | **APK 构建** | ✅ `assembleDebug` BUILD SUCCESSFUL（47s）；产物 `android/app/build/outputs/apk/debug/app-debug.apk`，17,436,189 字节，另存副本 `mobile-gateway/app-debug-0.1.0.apk`。`aapt2 dump badging`：`com.dsh.mobile` v0.1.0 / minSdk 26 / targetSdk 35 |
@@ -310,7 +310,7 @@ node test/e2e-smoke.mjs          # 默认 8791 端口
 `~/.dsh/.credentials.yaml` 里的 `deepseek-account-platform/default` 这类 grant，
 看不到桌面端登录态的模型路由。桌面端 UI 能用，是因为它走 Web 层 + 已登录凭据。
 
-**三条可选出路**（要用户拍板，别自己猜）：
+**三条可选出路**（已于 §11 解决，此处保留供回溯）：
 1. 给网关进程注入 `DEEPSEEK_API_KEY`（platform.deepseek.com 申请）——最直接；
 2. 在 DSH 桌面端「模型」页把 `deepseek-official` 这条路由配上密钥（走 credentials service）；
 3. 放弃 ACP，让网关照 surfcore 现在的做法连 Web 层（`discoverDshBaseUrl()` + 离线铸 Cookie）。
@@ -374,3 +374,94 @@ C 到 H 各盘下的 `deepseek` / `DeepSeek` / `dsh` 目录，最后兜底扫各
 | 模型密钥 | 每个用户自己的 DSH 要有可用 provider route，否则发消息必失败（§9.4） |
 | 网络方案 | 自用走 Tailscale（`docs/TAILSCALE.md`）；给别人用得靠「用户各自搭」或做中转服务 |
 | 后台常驻 | 网关没有开机自启/守护，关窗口就停 |
+
+---
+
+## 11. 2026-10-30 21:38–22:00 打通模型：ACP 的默认模型藏在 `id: acp` 里
+
+§9.4 那个「no API key」的阻塞已经解决。过程值得完整记下来，因为它推翻了两个常识假设。
+
+### 11.1 走过的三条死路（都别重走）
+
+| 试法 | 结果 |
+| --- | --- |
+| 给网关设 `DEEPSEEK_API_KEY` 环境变量 | 用户没有平台密钥，且这条路要求先充值 |
+| 改 `~/.dsh/profiles/acp/cordis.patch.yml` 里的 **`agent-default-model`** | **完全无效**——改完照样报同一个错。ACP 根本不读这个插件 |
+| 猜「ACP 会读桌面端的模型设置」 | 不会。桌面端的 `provider: our-free-model` 写在 `profiles/desktop/cordis.patch.yml`，ACP profile 只加载 `dsh-base` + `dsh-acp-app`，看不到 |
+
+### 11.2 定位方法（这条最有复用价值）
+
+DSH 自带 `--dump-config`，能把「bundle + profile patch + 根 patch」合成后的完整树打出来：
+
+```bash
+"/d/deepseek/DeepSeek Harness.exe" --expose-internals \
+  "D:/deepseek/resources/app.asar/dsh/node_modules/@deepseek-ai/dsh-desktop-host/lib/cli.js" \
+  --profile acp --dump-config > /tmp/acp-config.txt
+```
+
+在 dump 里搜 `deepseek-official`，答案就一行：
+
+```yaml
+- id: acp
+  name: '@deepseek-ai/dsh-acp'
+  config:
+    provider: deepseek-official     # ← 写死在这里，不是 agent-default-model
+    model: deepseek-v4-flash
+```
+
+**教训**：配置没生效时，先 `--dump-config` 看合成结果，别靠猜插件 id。
+
+### 11.3 最终改法（两条，按需）
+
+**A. 用账号型 provider（已登录 DSH 即可，不额外花钱）**
+
+```yaml
+- id: acp
+  name: '@deepseek-ai/dsh-acp'
+  config:
+    provider: deepseek-account
+    model: deepseek-v4.1-flash
+```
+
+实测报错从 `no API key` 变成 **`Insufficient Balance`**——说明路由通了，卡在账号余额。
+
+**B. 用本机已装的免费模型插件（本机最终采用）**
+
+```bash
+# ① 装进 acp profile（会把 bundle 一起加进 package.json）
+"...\DeepSeek Harness.exe" --expose-internals "...\cli.js" plugin --profile acp add \
+  "file:C:/Users/dfer5/.dsh/profiles/desktop/dsh-our-free-model-2.7.3.tgz"
+
+# ② 改默认模型
+- id: acp
+  config:
+    provider: our-free-model
+    model: kilo-auto/free
+```
+
+两条路都固化成了脚本：`mobile-gateway/scripts/setup-acp-model.mjs`
+（默认写 A；`--provider our-free-model --model kilo-auto/free` 写 B；`--dry-run` 只打印；
+文件里已有配置时**拒绝覆盖**，只打印要手工合并的片段）。
+
+### 11.4 实测结果（**第一次真正跑通**）
+
+```
+[e2e] 收到事件类型： hello, turn_start, text, turn_end
+[e2e] 文本块数量： 1
+[e2e] 拼起来： "收到"
+[e2e] turn_end： ok:true, result:{stopReason:"end_turn", text:"收到"}, durationMs:2838
+[e2e] ✅ 端到端通过
+```
+
+**连跑两次都通过**（2838ms / 2956ms）。这意味着：手机发消息 → 网关 → ACP → 模型 → 流式回包，
+这条链的每一环都被真实验证过，不再是"单元测试全绿但没人跑过"。
+
+### 11.5 对用户 DSH 安装做的改动（可回滚）
+
+| 文件 | 改动 | 备份 |
+| --- | --- | --- |
+| `~/.dsh/profiles/acp/cordis.patch.yml` | 写入 `id: acp` 的模型覆盖 | `cordis.patch.yml.bak-20261030-213947` |
+| `~/.dsh/profiles/acp/package.json` | 依赖 + bundles 加 `dsh-our-free-model` | `package.json.bak-*` |
+| `~/.dsh/profiles/acp/node_modules/` | pnpm 从本机 tgz 装了一次（离线） | 删掉即可 |
+
+**只影响 ACP profile，桌面端（`profiles/desktop`）一个字节都没动。**

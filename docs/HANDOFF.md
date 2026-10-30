@@ -5,6 +5,65 @@
 
 ---
 
+## 快照：2026-10-30 21:38–22:00（打通模型：端到端**第一次真正跑通**）
+
+### 用户要求
+
+> 「动手」（继续按上一轮建议：先解决密钥，再谈签名和向导）
+
+### 结论先行
+
+`node test/e2e-smoke.mjs` → **`text` 事件收到，模型回了「收到」，`turn_end ok:true`，2838ms**；
+连跑两次都通过（2838 / 2956ms）。**手机那条链的每一环都真跑过一遍了。**
+
+### 根因（推翻了两个假设）
+
+| 试法 | 结果 |
+| --- | --- |
+| 设 `DEEPSEEK_API_KEY` | 用户没有平台密钥 |
+| 改 `agent-default-model`（ACP profile patch） | **完全无效**，报错一字不变——ACP 不读这个插件 |
+| 想让 ACP 读桌面端模型设置 | 不会。ACP profile 只加载 `dsh-base` + `dsh-acp-app` |
+
+真凶在 `--dump-config` 里现形：`@deepseek-ai/dsh-acp` 自己的 config 写死了
+`provider: deepseek-official` / `model: deepseek-v4-flash`（API-key 型，需 `DEEPSEEK_API_KEY`）。
+
+### 改了什么
+
+| 改动 | 落点 |
+| --- | --- |
+| ACP 默认模型改为本机可用的免费路由 | `~/.dsh/profiles/acp/cordis.patch.yml`：`- id: acp` → `provider: our-free-model` / `model: kilo-auto/free` |
+| 免费模型插件装进 ACP profile | `~/.dsh/profiles/acp/package.json` + `node_modules`（pnpm 从桌面端本地 tgz 离线装） |
+| 固化脚本 | 新增 `mobile-gateway/scripts/setup-acp-model.mjs`（默认写账号型；`--provider/--model` 可改；已有配置时拒覆盖，只打印片段） |
+| 文档 | case 文档新增 §11（含三条死路、`--dump-config` 用法、实测输出、回滚清单）；§6 验证表把「ACP 运行期样本」改为 ✅ |
+
+### 已验证
+
+- `node test/run-all.js` → **114/114**。
+- `node test/e2e-smoke.mjs` → **通过 ×2**：`hello → turn_start → text → turn_end`，
+  `result.text="收到"`，`stopReason=end_turn`。
+- 报错演进路线（可作为排查参照）：`no API key for provider route "deepseek-official"`
+  → `Insufficient Balance`（路由通了、账号没余额）→ **成功**（换免费路由）。
+
+### 对用户 DSH 安装的改动（可回滚，只碰 acp profile）
+
+| 文件 | 备份 |
+| --- | --- |
+| `~/.dsh/profiles/acp/cordis.patch.yml` | `cordis.patch.yml.bak-20261030-213947` |
+| `~/.dsh/profiles/acp/package.json` | `package.json.bak-*` |
+| `~/.dsh/profiles/acp/node_modules/` | 删掉即回滚 |
+
+**`profiles/desktop` 未动**，桌面端不受影响。
+
+### 没验证 / 下一步
+
+- 真机（红米 K80）仍未装过：`adb install app-debug-0.1.0.apk` → 起网关 → `--pair` → 发消息。
+- 4G 下走 Tailscale 未实测（要手机+账号）。
+- 距「发布给别人用」还差：release 签名、首次启动向导、后台常驻。
+  **注意**：每个用户都要做一次 §11 的模型配置，否则他的手机会看到 `no API key` 或 `Insufficient Balance`——
+  这件事必须在向导里做掉，`scripts/setup-acp-model.mjs` 就是它的雏形。
+
+---
+
 ## 快照：2026-10-30 21:25–21:45（路径配置化：别人用自己的电脑也能跑）
 
 ### 用户要求
