@@ -39,6 +39,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     private var client: GatewayClient? = null
     private var sse: SseSubscription? = null
+
+    /** 正在自动重建会话（防重入：SSE 可能连发多个失败事件）。 */
+    private var recoveringSession = false
     private var speakJob: Job? = null
 
     private val _state = MutableStateFlow(AppState(baseUrl = store.baseUrl, asrBackend = store.asrBackend, announceMode = store.announceMode))
@@ -169,9 +172,69 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** DSH 说「不认识这个会话」——通常是网关重启后会话 id 过期。 */
-    private fun isUnknownSession(e: GatewayException): Boolean {
-        val blob = "${e.error} ${e.hint}".lowercase()
-        return blob.contains("unknown session") || blob.contains("会话不存在")
+    private fun isUnknownSession(e: GatewayException): Boolean = isUnknownSessionText("${e.error} ${e.hint}")
+
+    private fun isUnknownSessionText(text: String): Boolean {
+        val blob = text.lowercase()
+        return blob.contains("unknown session") || blob.contains("会话不存在") || blob.contains("unknown_session")
+    }
+
+    /**
+     * 会话失效后的自愈：新建一个会话，把刚才那条用户消息重发过去。
+     *
+     * 为什么不清空 messages：用户刚打的字还在对话流里，清掉等于「我发的消息被吞了」。
+     * 返回 true 表示已接管（调用方不要再写错误卡）。
+     */
+    private fun recoverSession(resend: String?): Boolean {
+        if (recoveringSession) return false
+        val c = client ?: return false
+        recoveringSession = true
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val created = c.createSession(null)
+                store.lastSessionId = created.sessionId
+                _state.update {
+                    it.copy(
+                        currentSessionId = created.sessionId,
+                        sessions = runCatching { c.listSessions() }.getOrDefault(it.sessions),
+                        streamingText = "",
+                        approvals = emptyList(),
+                        thinking = !resend.isNullOrBlank(),
+                        lastTurnFailed = null,
+                    )
+                }
+                reconnectStream(created.sessionId)
+                if (!resend.isNullOrBlank()) {
+                    runCatching { c.sendMessage(created.sessionId, resend) }
+                        .onFailure { err ->
+                            _state.update {
+                                it.copy(
+                                    thinking = false,
+                                    messages = it.messages + ChatMessage(
+                                        role = Role.Error,
+                                        text = "重发失败：${describeException(err as? Exception ?: Exception(err))}",
+                                        hint = "看电脑上网关窗口的报错。",
+                                    ),
+                                )
+                            }
+                        }
+                }
+            } catch (e: Exception) {
+                _state.update {
+                    it.copy(
+                        thinking = false,
+                        messages = it.messages + ChatMessage(
+                            role = Role.Error,
+                            text = "会话已失效，自动新建也失败了：${describeException(e)}",
+                            hint = "看电脑上网关窗口的报错；也可以点右上角 + 手动新建一个会话。",
+                        ),
+                    )
+                }
+            } finally {
+                recoveringSession = false
+            }
+        }
+        return true
     }
 
     fun unpair() {
@@ -331,19 +394,27 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     }
                     if (message.text.isNotBlank()) maybeAnnounce(message.text)
                 } else {
-                    _state.update {
-                        it.copy(
-                            thinking = false,
-                            streamingText = "",
-                            approvals = emptyList(),
-                            // 失败必须留痕在对话流里，不能只闪一下 banner
-                            messages = it.messages + ChatMessage(
-                                role = Role.Error,
-                                text = event.error ?: "本轮失败",
-                                hint = event.hint,
-                            ),
-                            lastTurnFailed = event.code,
-                        )
+                    val errText = event.error ?: "本轮失败"
+                    // 关键：这个错误是 SSE 的 turn_end 事件带回来的，**不是** HTTP 异常，
+                    // 所以 send() 里的 catch 永远看不到它（第一版就栽在这）。
+                    // 会话失效属于「网关重启后的正常现象」，不该甩给用户——自动重建再发一次。
+                    if (isUnknownSessionText(errText) && recoverSession(_state.value.messages.lastOrNull { it.role == Role.User }?.text)) {
+                        // 已交给 recoverSession 处理，这里不写错误卡
+                    } else {
+                        _state.update {
+                            it.copy(
+                                thinking = false,
+                                streamingText = "",
+                                approvals = emptyList(),
+                                // 失败必须留痕在对话流里，不能只闪一下 banner
+                                messages = it.messages + ChatMessage(
+                                    role = Role.Error,
+                                    text = errText,
+                                    hint = event.hint,
+                                ),
+                                lastTurnFailed = event.code,
+                            )
+                        }
                     }
                 }
             }

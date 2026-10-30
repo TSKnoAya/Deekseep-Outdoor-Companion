@@ -673,3 +673,18 @@ adb shell am start -n com.dsh.mobile/.MainActivity
 
 > 踩坑记录：Git Bash 会把 `adb pull /sdcard/x.png` 的路径改写成 Windows 路径，
 > 必须 `export MSYS_NO_PATHCONV=1`，否则报 `No such file or directory`。
+
+### 15.4 第一版修法为什么会“没生效”
+
+第一版把自愈写在 `send()` 的 `catch (GatewayException)` 里，**但那根本不是异常**：
+`POST /v1/messages` 立刻返回 202，失败是**之后由 SSE 的 `turn_end` 事件**带回来的。
+所以 catch 永远不触发，错误卡照旧显示。
+
+正确位置：`handleEvent` 的 `StreamEvent.TurnEnd(ok=false)` 分支。改法：
+- 判断 error 文本是否含 `unknown session` → 调 `recoverSession(最后一条用户消息)`；
+- `recoverSession`：新建会话 → 更新 `currentSessionId` → `reconnectStream` →
+  把刚才那条用户消息**直接重发**（不重复插入气泡）；
+- 用 `recoveringSession` 防重入（SSE 可能连发多个失败事件）；
+- 返回 true 表示已接管，调用方不再写错误卡。
+
+**教训**：**异步协议的错误可能来自事件流而不是响应体**。判断「错误从哪来」比写重试更重要。
