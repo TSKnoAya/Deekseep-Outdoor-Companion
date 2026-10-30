@@ -508,3 +508,49 @@ DSH 自带 `--dump-config`，能把「bundle + profile patch + 根 patch」合�
 
 > 注意：本会话里打印过好几次配对码（717842 / 244770 / 650750 …），**全部已失效**——
 > 网关进程一退出码就作废，每次启动都会打印新的。
+
+---
+
+## 13. 2026-10-30 22:48–23:00 真机配对失败 = App 的致命 bug（网络全在主线程）
+
+用户截图：地址 `http://192.168.1.247:8788` + 码 `650750`，提示「**配对失败：null**」。
+
+### 13.1 先排除的两个可能
+
+| 可能 | 判断 |
+| --- | --- |
+| 超过 5 分钟 | 那个 `650750` 确实是我自己测试进程打印的，进程一死就作废——**但不是本次主因** |
+| 网关没开 | 查 `netstat` 确实没有 8788 监听——**但也不足以解释 `null`** |
+
+关键线索是 **`null`**：如果只是连不上，`GatewayClient.callJson` 会捕获 `IOException` 并给出
+「连不上网关（…）+ 确认同 Wi-Fi」；如果是码错，服务端会返回 `pair.*` 结构化错误。
+两者都不该是 `null`。
+
+### 13.2 真凶：`NetworkOnMainThreadException`
+
+`ChatViewModel` 里 **9 处** `viewModelScope.launch { … }` 直接在里面调 OkHttp 的
+**阻塞式 `execute()`**，全程没有 `withContext(Dispatchers.IO)`。
+`viewModelScope` 默认跑在 `Dispatchers.Main`，Android 会在主线程做 socket 操作时抛
+`NetworkOnMainThreadException` —— **这个异常的 message 就是 null**，于是落到
+`catch (e: Exception)` 分支，界面显示「配对失败：null」。
+
+也就是说：**旧 APK 在任何网络请求上都必然失败**，跟配对码、防火墙、时间窗口都无关。
+之前一直只用 `e2e-smoke.mjs`（Node 侧）验证，App 侧从没跑过一轮真实请求，所以这个 bug
+藏到了真机上才暴露。
+
+### 13.3 修了什么
+
+| 修复 | 落点 |
+| --- | --- |
+| 9 处网络协程改 `launch(Dispatchers.IO)`（配对/测试连接/载入会话/建会话/发消息/取消/审批/设置） | `ChatViewModel.kt` |
+| 语音输入、TTS 两处**保持 Main**（`SpeechRecognizer` 与 `TextToSpeech` 需要主线程 Looper） | 同上，未改动 |
+| 异常翻译不再出现 `null` | 新增 `describeException()`：message 为空时至少打类名 |
+| 新增「测试连接（不需要配对码）」按钮 | 打 `/v1/health`，能当场区分「连不上」与「码错了」；成功用绿色、失败用红色 |
+| 地址框误标红 | 判据改为「含空格 / 无冒号」才算错 |
+| APK 重打包 | 17.5 MB |
+
+### 13.4 结论（给用户的一句话）
+
+**必须装新 APK**：旧的那版不可能配对成功，不是操作问题。
+装好后先点「测试连接」——出现绿色的「连上了：网关 v0.1.0 / DSH 已连接」，
+再填窗口里刚打印的 6 位码（5 分钟内点配对）。

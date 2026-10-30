@@ -12,6 +12,7 @@ import com.dsh.mobile.voice.DeviceSpeechRecognizer
 import com.dsh.mobile.voice.HeadsetDetector
 import com.dsh.mobile.voice.SpeechException
 import com.dsh.mobile.voice.Speaker
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -73,7 +74,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             _state.update { it.copy(banner = Banner("配对码是 6 位数字", "看电脑上网关窗口打印的那 6 位数。", false)) }
             return
         }
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             _state.update { it.copy(busy = "pairing") }
             try {
                 val normalized = normalizeBaseUrl(s.baseUrl)
@@ -88,9 +89,83 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             } catch (e: GatewayException) {
                 _state.update { it.copy(busy = null, banner = Banner(e.error, e.hint, e.retryable)) }
             } catch (e: Exception) {
-                _state.update { it.copy(busy = null, banner = Banner("配对失败：${e.message}", "检查地址与配对码后重试。", true)) }
+                // 之前这里只打 e.message，遇到 message 为 null 的异常就显示「配对失败：null」，
+                // 用户完全不知道下一步做什么（实测就被这个问题卡住过一次）。
+                _state.update {
+                    it.copy(
+                        busy = null,
+                        banner = Banner(
+                            "配对失败：${describeException(e)}",
+                            "先点下面的「测试连接」：能连上说明是配对码问题，连不上就是地址/防火墙问题。",
+                            true,
+                        ),
+                    )
+                }
             }
         }
+    }
+
+    /**
+     * 测试连接：打 `/v1/health`（免鉴权），**不需要配对码**。
+     *
+     * 为什么要有它：用户分不清「连不上网关」和「配对码错了」——两者的补救办法完全不同。
+     * 这个按钮把两种情况当场分开。
+     */
+    fun testConnection() {
+        val s = _state.value
+        if (s.baseUrl.isBlank()) {
+            _state.update {
+                it.copy(banner = Banner("先填网关地址", "在电脑上双击 start-gateway.bat，窗口里会打印 http://<IP>:8788。", false))
+            }
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            _state.update { it.copy(busy = "testing") }
+            val normalized = normalizeBaseUrl(s.baseUrl)
+            try {
+                val h = GatewayClient(normalized, null).health()
+                store.baseUrl = normalized
+                _state.update {
+                    it.copy(
+                        busy = null,
+                        baseUrl = normalized,
+                        banner = if (h.dshConnected) {
+                            Banner(
+                                "连上了：网关 v${h.version}",
+                                "DSH 已连接（${h.dshName ?: "?"}）。现在把电脑窗口里的 6 位配对码填进上面，点「配对」。",
+                                false,
+                                ok = true,
+                            )
+                        } else {
+                            Banner(
+                                "网关在跑，但 DSH 还没连上",
+                                "电脑上那个窗口里应该有「启动 DSH（ACP profile）…」，等几秒会变成「DSH 已连接」。没变就看窗口里的报错。",
+                                true,
+                            )
+                        },
+                    )
+                }
+            } catch (e: GatewayException) {
+                _state.update { it.copy(busy = null, banner = Banner(e.error, e.hint, e.retryable)) }
+            } catch (e: Exception) {
+                _state.update {
+                    it.copy(
+                        busy = null,
+                        banner = Banner(
+                            "测试失败：${describeException(e)}",
+                            "在手机浏览器打开 ${normalized}/v1/health —— 出 JSON 说明网络没问题（那就是 App 的问题）；打不开说明网络/防火墙没放行。",
+                            true,
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    /** 把异常翻成人话：message 可能是 null，那就至少给个类名。 */
+    private fun describeException(e: Exception): String {
+        val msg = e.message?.takeIf { it.isNotBlank() }
+        return msg ?: "${e.javaClass.simpleName}（无错误信息）"
     }
 
     fun unpair() {
@@ -115,7 +190,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun loadSessionsAndConnect() {
         val c = client ?: return
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             try {
                 val health = c.health()
                 _state.update { it.copy(dshConnected = health.dshConnected, gatewayVersion = health.version, banner = null) }
@@ -143,7 +218,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     fun createSession(cwd: String? = null) {
         val c = client ?: return
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             try {
                 val created = c.createSession(cwd)
                 store.lastSessionId = created.sessionId
@@ -291,7 +366,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             )
         }
 
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             try {
                 val r = c.sendMessage(sessionId, body)
                 if (r.queued > 0) {
@@ -313,7 +388,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     fun cancelTurn() {
         val c = client ?: return
         val sid = _state.value.currentSessionId ?: return
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             try {
                 c.cancel(sid)
                 _state.update { it.copy(thinking = false, queuedNotice = null) }
@@ -327,7 +402,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     fun answerApproval(approvalId: String, optionId: String) {
         val c = client ?: return
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             try {
                 c.answerApproval(approvalId, optionId)
                 _state.update { st -> st.copy(approvals = st.approvals.filterNot { it.id == approvalId }) }
@@ -431,7 +506,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         store.announceMode = mode
         _state.update { it.copy(announceMode = mode) }
         val c = client ?: return
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             try {
                 c.putSettings(buildJsonObject {
                     put("announceMode", JsonPrimitive(mode))
@@ -446,7 +521,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         store.asrBackend = backend
         _state.update { it.copy(asrBackend = backend) }
         val c = client ?: return
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             try {
                 c.putSettings(buildJsonObject {
                     put("asrBackend", JsonPrimitive(backend))
@@ -518,4 +593,10 @@ data class ApprovalUi(
  * 顶部提示条。`retryable` 决定要不要显示「重试」按钮——
  * 配置类错误重试没用，应该引导用户去改设置。
  */
-data class Banner(val title: String, val hint: String, val retryable: Boolean)
+data class Banner(
+    val title: String,
+    val hint: String,
+    val retryable: Boolean,
+    /** true 表示「这是一条好消息」（连接测试通过）。用来换配色，不然绿事也标红。 */
+    val ok: Boolean = false,
+)

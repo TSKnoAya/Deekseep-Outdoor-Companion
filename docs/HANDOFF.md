@@ -5,6 +5,50 @@
 
 ---
 
+## 快照：2026-10-30 22:48–23:00（`配对失败：null` = App 网络全在主线程，**必须重装 APK**）
+
+### 用户要求
+
+> 「我刚刚试了网关地址和 6 位配对码，提示配对失败，手机 wifi 和电脑在同一个路由器，是不是超过了 5 分钟？」
+
+### 结论
+
+不是时间问题（虽然那个码确实也失效了）。真凶是 App 的**致命 bug**：
+
+`ChatViewModel` 里 **9 处** `viewModelScope.launch { … }` 直接在默认的 `Dispatchers.Main`
+上跑 OkHttp 的阻塞 `execute()` → Android 抛 `NetworkOnMainThreadException` →
+**该异常 message 为 null** → 落到 `catch (e: Exception)` → 界面显示「配对失败：null」。
+
+**旧 APK 在任何网络请求上都会失败**，与配对码/防火墙/5 分钟窗口无关。之前只用
+`e2e-smoke.mjs`（Node 侧）验过，App 侧从没跑过真实请求，所以藏到真机才暴露。
+
+### 改了什么
+
+| 修复 | 落点 |
+| --- | --- |
+| 9 处网络协程改 `launch(Dispatchers.IO)` | `ChatViewModel.kt`（配对/测试连接/会话/发消息/取消/审批/设置） |
+| 语音输入、TTS 保持 Main（需要 Looper） | 同上，未动 |
+| 异常不再显示 null | 新增 `describeException()` |
+| 新增「测试连接（不需要配对码）」按钮 | 打 `/v1/health`，绿色=通了，红色=连不上；当场区分两种失败 |
+| 地址框误标红 | 判据改为「含空格/无冒号」 |
+| APK 重打包 | `mobile-gateway/app-debug-0.1.0.apk`（17.5 MB） |
+
+### 已验证
+
+- `BUILD SUCCESSFUL`（26s）。
+- 网关侧：`curl http://192.168.1.247:8788/v1/health` → `ok:true, dsh.connected:true`；
+  同一进程窗口打印 `http://192.168.1.247:8788` 与配对码，DSH 4 秒内连上。
+- **App 侧修复未经真机验证**（手机没连 adb，`adb devices` 为空）——需要用户装新 APK 再试。
+
+### 没验证 / 下一步
+
+- 用户装新 APK 后：先点「测试连接」→ 绿色 → 再填新码配对。
+- 若「测试连接」仍红：按 banner 提示在手机浏览器打开 `http://192.168.1.247:8788/v1/health`，
+  能出 JSON = 网络 OK（App 还有别的 bug）；打不开 = 网络/防火墙。
+- 网关当前**没在跑**（`netstat` 无 8788），用户必须双击 `start-gateway.bat` 并保持窗口开着。
+
+---
+
 ## 快照：2026-10-30 22:37–22:50（真机装上但卡在配对：做了双击启动器）
 
 ### 用户要求

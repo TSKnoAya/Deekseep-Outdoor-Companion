@@ -41,6 +41,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -239,10 +240,25 @@ private fun PairingScreen(state: AppState, vm: ChatViewModel) {
             }
         }
 
+        Spacer(Modifier.height(8.dp))
+        OutlinedButton(
+            onClick = vm::testConnection,
+            enabled = state.busy == null,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(if (state.busy == "testing") "正在测试…" else "测试连接（不需要配对码）")
+        }
+
         state.banner?.let { banner ->
             Spacer(Modifier.height(16.dp))
             Card(
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+                colors = CardDefaults.cardColors(
+                    containerColor = if (banner.ok) {
+                        MaterialTheme.colorScheme.primaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.errorContainer
+                    },
+                ),
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Column(Modifier.padding(12.dp)) {
