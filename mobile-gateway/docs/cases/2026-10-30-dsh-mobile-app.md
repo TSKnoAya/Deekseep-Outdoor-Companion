@@ -715,3 +715,66 @@ Scaffold(
 > 过程备注：小米 MIUI 默认禁止 `adb shell input tap`（`Injecting input events requires
 > INJECT_EVENTS permission`），所以「弹键盘」这一步只能由用户手点，无法脚本化——这也说明
 > 自动化验证到不了 UI 交互层，真机手测不可省。
+
+---
+
+## 16. 2026-10-30 23:31–00:10 做 DSH 插件：在设置里管网关/配对码/模型
+
+用户要求：**换模型不该改代码**，并且要能在 **DSH 的设置界面**里改（顺带看网关状态和配对码）。
+
+### 16.1 分两层：网关做实事，插件只做代理
+
+| 层 | 做什么 | 为什么 |
+| --- | --- | --- |
+| 网关 `/admin/*`（**仅本机回环**） | 状态、发配对码、读/写 ACP 模型、重载 ACP | 配对码只活在网关内存里；换模型必须由「ACP 子进程的爹」重开进程才生效 |
+| 插件 host（`/dsh-mobile-gateway/api/*`） | 把上面几个接口转给设置页 | 设置页在 DSH 的 web 界面里，同源 fetch 即可 |
+| 插件 client | `settings.section` 插槽里加一页「手机网关」 | 用户可见的入口 |
+
+> 没在插件里直接读文件/改配置：那样会和网关抢同一份状态（配对码在内存、ACP 进程归网关管）。
+
+### 16.2 网关新增的管理接口
+
+| 接口 | 说明 |
+| --- | --- |
+| `GET  /admin/status` | 版本、监听地址、DSH 是否连接、已配对设备数 |
+| `POST /admin/pair` | 生成 6 位配对码（换手机/重装 App 用，不用重启窗口） |
+| `GET  /admin/acp-model` | 当前 provider/model + 文件路径 |
+| `PUT  /admin/acp-model` | 写 patch（**先备份**）→ 自动重开 ACP 子进程 → 返回 `reloaded` |
+| `POST /admin/reload` | 手动重开 ACP |
+
+安全：`pathname.startsWith('/admin/')` 时按 `req.socket.remoteAddress` 卡回环，
+非本机直接 403。网关监听 `0.0.0.0`，这些接口能改模型，不能只靠"路径没人知道"。
+
+### 16.3 模型读写的实现（`src/acp-model.js`）
+
+- `readAcpModel(text)` / `withAcpModel(text, {provider, model})`：**只替换 `- id: acp` 那一段**，
+  其它条目、注释、空行原样保留；
+- 幂等：连写 5 次也只留一段（靠先删掉自己上次写的标记注释）；
+- `saveAcpModel` 写前备份成 `cordis.patch.yml.bak-<ts>`；
+- 拒绝带空格/换行的 provider/model（YAML 注入面）；
+- `test/acp-model.test.js` 11 条钉住上述行为 → 全量 **125/125**。
+
+### 16.4 插件结构（`mobile-gateway/dsh-plugin/`）
+
+```
+dsh-plugin/
+├─ package.json        dsh.bundle.patch = [./cordis.patch.yml]；dsh.client.platform = web
+├─ cordis.patch.yml    insert: { id: mobile-gateway, name: mobile-gateway }
+└─ lib/
+   ├─ index.js         host：webServer.register 4 条 exact 路由 + 回环校验 + 代理
+   └─ client.js        client：__ModuleLoader__ + slots.register("settings.section")
+```
+
+安装（等价于 surfcore 的方式）：`dsh plugin --profile desktop add link:<绝对路径>`
+—— 它同时把包名加进 `dsh.profile.bundles` 与 `dependencies`。
+
+### 16.5 一个没验完的地方（诚实记录）
+
+`desktop` profile 被 Electron 应用独占管理（`--dump-config` 直接拒绝：
+`profile "desktop" is managed exclusively by the Electron application`），
+而且**从这个工具里启动的 GUI 进程会随命令结束被回收**——所以「插件页面到底长什么样」
+必须由用户手动打开 DSH 看。已验证的只有：host 半边的模块能被加载、
+4 条路由都注册成功（用假 ctx 跑过）。
+
+回滚：把 `~/.dsh/profiles/desktop/package.json` 换回
+`package.json.bak-*`（去掉 `mobile-gateway` 依赖与 bundle），重启应用即回到原状。

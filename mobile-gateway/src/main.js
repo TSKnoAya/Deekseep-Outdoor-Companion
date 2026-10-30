@@ -8,6 +8,7 @@
  * `dsh.connected=false`，知道在等什么。
  */
 
+import path from 'node:path';
 import { spawnTransport } from './transport.js';
 import { AcpClient } from './acp-client.js';
 import { DeviceStore } from './devices.js';
@@ -188,6 +189,27 @@ function scheduleReconnect(reason) {
 }
 
 // ── HTTP ────────────────────────────────────────────────────────────────
+const listening = parseListen(config.listen);
+// DSH 的 home：ACS 模型写的是 <home>/profiles/acp，必须和 DSH 子进程看到的一致
+const dshHome = config.dshHome || process.env.DSH_HOME || path.join(process.env.USERPROFILE || process.cwd(), '.dsh');
+
+/**
+ * 重开 ACP 子进程，让新写的 profile 生效。
+ * 为什么不重启整个网关：模型只影响 ACP 子进程，重启网关会打断手机端的 SSE 连接。
+ */
+function reloadAcp() {
+  log('重载 ACP：销毁旧子进程并按新配置重连');
+  try {
+    acp?.destroy();
+  } catch {
+    /* ignore */
+  }
+  acp = null;
+  reconnectDelay = 1000;
+  connect();
+  return { reloaded: true };
+}
+
 const server = createGatewayServer({
   devices,
   getAcp: () => acp,
@@ -201,6 +223,12 @@ const server = createGatewayServer({
     version: config.version,
     dshExe: config.dshExe,
     defaultCwd: config.defaultCwd,
+    stateDir: config.stateDir,
+  },
+  admin: {
+    dshHome,
+    listen: () => listening,
+    reloadAcp,
   },
   voiceStatus: () => ({
     asrBackend: settings.get().asrBackend,
@@ -209,7 +237,7 @@ const server = createGatewayServer({
   }),
 });
 
-const { host, port } = parseListen(config.listen);
+const { host, port } = listening;
 server.listen(port, host, () => {
   const shown = host.includes(':') ? `[${host}]` : host;
   log(`网关已启动：http://${shown}:${port}`);

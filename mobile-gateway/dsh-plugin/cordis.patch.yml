@@ -1,0 +1,9 @@
+# mobile-gateway 插件挂载
+#
+# 只有一个条目：宿主半边（lib/index.js）注册 /dsh-mobile-gateway/api/*，
+# 客户端半边（lib/client.js）往 DSH 设置的「settings.section」插槽注册一页。
+# 两半共用同一个 id，DSH 靠它把 client 和 host 对上。
+- insert:
+    - id: mobile-gateway
+      name: mobile-gateway
+      config: {}

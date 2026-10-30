@@ -22,6 +22,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 
 const FILES = [
   'acp-client.test.js',
+  'acp-model.test.js',
   'announce.test.js',
   'cli.test.js',
   'devices.test.js',

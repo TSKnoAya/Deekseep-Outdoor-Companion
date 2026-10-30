@@ -1,0 +1,23 @@
+{
+  "name": "mobile-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "description": "手机网关插件：在 DSH 设置里查看网关状态、生成配对码、切换手机端使用的模型。",
+  "type": "module",
+  "main": "./lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": [
+        "./cordis.patch.yml"
+      ]
+    },
+    "client": {
+      "platform": "web",
+      "inject": []
+    }
+  }
+}

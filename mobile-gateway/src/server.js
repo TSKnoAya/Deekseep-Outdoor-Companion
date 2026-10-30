@@ -14,6 +14,7 @@
 import http from 'node:http';
 import { CODES, fail, toFailure, ok, requireThat } from './errors.js';
 import { ANNOUNCE_MODES } from './voice/announce.js';
+import { loadAcpModel, saveAcpModel } from './acp-model.js';
 
 const MAX_JSON_BODY = 4 * 1024 * 1024; // 4MB；音频走专门的 /v1/asr 且单独限长
 const MAX_AUDIO_BODY = 24 * 1024 * 1024;
@@ -61,10 +62,25 @@ export function createGatewayServer(deps) {
       return;
     }
 
-    // ① 不需要鉴权的两个端点
+    // ① 不需要鉴权的端点
     if (pathname === '/v1/pair' && req.method === 'POST') return handlePair(req, res);
     if (pathname === '/v1/health' && req.method === 'GET') return handleHealth(req, res);
     if (pathname === '/' && req.method === 'GET') return handleRoot(req, res);
+
+    // ①.5 管理接口：**只允许本机回环**。
+    // 这些接口能改模型、发配对码，比业务接口危险得多；网关又监听 0.0.0.0，
+    // 所以必须按来源 IP 卡死，不能只靠「藏起来」。
+    if (pathname.startsWith('/admin/')) {
+      if (!isLoopback(req)) {
+        return sendJson(res, toFailure(fail(CODES.UNAUTHORIZED, '管理接口只允许本机访问', {})), 403);
+      }
+      if (pathname === '/admin/status' && req.method === 'GET') return handleAdminStatus(req, res);
+      if (pathname === '/admin/pair' && req.method === 'POST') return handleAdminPair(req, res);
+      if (pathname === '/admin/reload' && req.method === 'POST') return handleAdminReload(req, res);
+      if (pathname === '/admin/acp-model' && req.method === 'GET') return handleAdminGetModel(req, res);
+      if (pathname === '/admin/acp-model' && req.method === 'PUT') return handleAdminPutModel(req, res);
+      return sendJson(res, toFailure(fail(CODES.NOT_FOUND, `没有这个管理接口：${pathname}`, {})), 404);
+    }
 
     // ② 其余全部要鉴权
     const device = authenticate(req);
@@ -130,6 +146,75 @@ export function createGatewayServer(deps) {
         hint: '这是网关。手机 App 用 /v1/* 接口；配对请先在电脑端点「生成配对码」。',
       }),
     );
+  }
+
+  // ── 管理接口（仅本机）────────────────────────────────────────────────────
+  // 存在的理由：手机端要换模型/看状态/发配对码，但手机 App 不该有这些权限。
+  // 调用方是 DSH 的设置页插件（跑在本机），所以按来源 IP 卡回环就够了。
+
+  function isLoopback(req) {
+    const ip = String(req.socket?.remoteAddress ?? '');
+    return ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
+  }
+
+  function handleAdminStatus(req, res) {
+    const acp = deps.getAcp();
+    sendJson(
+      res,
+      ok({
+        version: meta.version ?? '?',
+        listen: deps.admin?.listen?.() ?? null,
+        stateDir: meta.stateDir ?? null,
+        dshExe: meta.dshExe ?? null,
+        dsh: {
+          connected: Boolean(acp?.initialized),
+          name: acp?.serverInfo?.name ?? null,
+        },
+        devices: deps.devices.list().length,
+      }),
+    );
+  }
+
+  /** 生成配对码：给「换手机 / 重装 App」用，不用去重启网关窗口。 */
+  function handleAdminPair(req, res) {
+    sendJson(res, ok(deps.devices.issuePairCode()));
+  }
+
+  async function handleAdminReload(req, res) {
+    const result = await deps.admin?.reloadAcp?.();
+    sendJson(res, ok(result ?? { reloaded: true }));
+  }
+
+  function handleAdminGetModel(req, res) {
+    const dshHome = deps.admin?.dshHome;
+    requireThat(Boolean(dshHome), CODES.BAD_REQUEST, '网关不知道自己属于哪个 DSH_HOME', {});
+    sendJson(res, ok(loadAcpModel(dshHome)));
+  }
+
+  async function handleAdminPutModel(req, res) {
+    const dshHome = deps.admin?.dshHome;
+    requireThat(Boolean(dshHome), CODES.BAD_REQUEST, '网关不知道自己属于哪个 DSH_HOME', {});
+    const body = await readJson(req, MAX_JSON_BODY);
+    const provider = String(body.provider ?? '').trim();
+    const model = String(body.model ?? '').trim();
+    let saved;
+    try {
+      saved = saveAcpModel(dshHome, { provider, model });
+    } catch (e) {
+      if (e?.code === 'bad-request') throw fail(CODES.BAD_REQUEST, e.message, { hint: '格式：deepseek-account / deepseek-v4.1-flash' });
+      throw e;
+    }
+    // 只改文件不生效：DSH 的 profile 是进程启动时读的，必须让 ACP 子进程重开一次
+    let reloaded = false;
+    let reloadError = null;
+    try {
+      await deps.admin?.reloadAcp?.();
+      reloaded = true;
+    } catch (e) {
+      reloadError = e?.message ?? String(e);
+      log(`改完模型但重载 ACP 失败：${reloadError}`);
+    }
+    sendJson(res, ok({ ...saved, reloaded, reloadError }));
   }
 
   function handleHealth(req, res) {
