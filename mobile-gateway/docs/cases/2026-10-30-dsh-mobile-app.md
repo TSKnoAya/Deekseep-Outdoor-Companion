@@ -710,5 +710,8 @@ Scaffold(
   上滑唤出时不压住输入框；
 - 配对页 `PairingScreen` 也补 `imePadding()`（输配对码时同样会被键盘挡）。
 
-> 验证限制：小米 MIUI 默认禁止 `adb shell input tap`（`Injecting input events requires
-> INJECT_EVENTS permission`），所以触发键盘这一步只能由用户手点，无法脚本化。
+**真机确认（23:23）**：用户手点输入框后反馈「键盘弹出后不会被挡了」→ 此项 ✅ 通过。
+
+> 过程备注：小米 MIUI 默认禁止 `adb shell input tap`（`Injecting input events requires
+> INJECT_EVENTS permission`），所以「弹键盘」这一步只能由用户手点，无法脚本化——这也说明
+> 自动化验证到不了 UI 交互层，真机手测不可省。
