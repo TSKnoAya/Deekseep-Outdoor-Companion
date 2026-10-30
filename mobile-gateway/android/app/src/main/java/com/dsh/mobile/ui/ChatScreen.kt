@@ -100,56 +100,49 @@ fun ChatScreen(state: AppState, vm: ChatViewModel) {
                     titleContentColor = MaterialTheme.colorScheme.onSurface,
                 ),
                 title = {
-                    // 标题可点：弹出会话列表，能切回之前的对话。
-                    // 之前只有右上角的「＋」，一点就新开会话、旧对话在手机上再也找不回来。
-                    Box {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.clickable {
-                                showSessions = true
-                                vm.refreshSessions()
-                            }.padding(end = 8.dp),
-                        ) {
-                            if (Skin.ENABLED) {
-                                Image(
-                                    painter = painterResource(R.drawable.skin_emblem),
-                                    contentDescription = null,
-                                    modifier = Modifier.height(28.dp).width(20.dp),
-                                )
-                                Spacer(Modifier.width(8.dp))
-                            }
-                            Column {
-                                Text(
-                                    if (Skin.ENABLED) "深海工坊" else "DSH",
-                                    style = MaterialTheme.typography.titleMedium,
-                                )
-                                Text(
-                                    subtitle(state),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = when {
-                                        state.streamLostReason != null -> MaterialTheme.colorScheme.error
-                                        state.dshConnected -> MaterialTheme.colorScheme.onSurfaceVariant
-                                        else -> MaterialTheme.colorScheme.error
-                                    },
-                                )
-                            }
-                            Icon(
-                                Icons.Default.ArrowDropDown,
-                                contentDescription = "切换会话",
-                                modifier = Modifier.size(20.dp),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (Skin.ENABLED) {
+                            Image(
+                                painter = painterResource(R.drawable.skin_emblem),
+                                contentDescription = null,
+                                modifier = Modifier.height(28.dp).width(20.dp),
                             )
+                            Spacer(Modifier.width(8.dp))
                         }
-
-                        DropdownMenu(expanded = showSessions, onDismissRequest = { showSessions = false }) {
-                            DropdownMenuItem(
-                                text = { Text("＋ 新对话") },
-                                onClick = {
-                                    showSessions = false
-                                    vm.createSession()
+                        Column {
+                            Text(
+                                if (Skin.ENABLED) "深海工坊" else "DSH",
+                                style = MaterialTheme.typography.titleMedium,
+                            )
+                            Text(
+                                subtitle(state),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = when {
+                                    state.streamLostReason != null -> MaterialTheme.colorScheme.error
+                                    state.dshConnected -> MaterialTheme.colorScheme.onSurfaceVariant
+                                    else -> MaterialTheme.colorScheme.error
                                 },
                             )
-                            HorizontalDivider()
+                        }
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { vm.createSession() }) {
+                        Icon(Icons.Default.Add, contentDescription = "新建会话")
+                    }
+                    // 会话切换放在「＋」和「齿轮」之间：新建在左、切换居中、设置在右，
+                    // 三个动作从左到右正好是「开新的 → 换旧的 → 调设置」。
+                    Box {
+                        IconButton(onClick = {
+                            showSessions = true
+                            vm.refreshSessions()
+                        }) {
+                            Icon(Icons.Default.ArrowDropDown, contentDescription = "历史会话")
+                        }
+                        DropdownMenu(
+                            expanded = showSessions,
+                            onDismissRequest = { showSessions = false },
+                        ) {
                             if (state.sessions.isEmpty()) {
                                 DropdownMenuItem(
                                     text = {
@@ -188,11 +181,6 @@ fun ChatScreen(state: AppState, vm: ChatViewModel) {
                                 )
                             }
                         }
-                    }
-                },
-                actions = {
-                    IconButton(onClick = { vm.createSession() }) {
-                        Icon(Icons.Default.Add, contentDescription = "新建会话")
                     }
                     IconButton(onClick = { showSettings = true }) {
                         Icon(Icons.Default.Settings, contentDescription = "设置")

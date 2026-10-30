@@ -24,6 +24,7 @@ import {
   parseListen,
   readStartupConfig,
   ensureStartupConfigTemplate,
+  saveStartupConfigPatch,
 } from './config.js';
 import { resolveDshPaths, notFoundHint } from './paths.js';
 import { createFishInjector } from './fish-inject.js';
@@ -227,7 +228,12 @@ const server = createGatewayServer({
   fish: createFishInjector({
     dshHome,
     log,
-    enabled: process.env.DSH_MOBILE_PERSONA !== '0',
+    // 优先级：环境变量 > config.json 的 personaEnabled > 默认开
+    enabled: process.env.DSH_MOBILE_PERSONA !== undefined
+      ? process.env.DSH_MOBILE_PERSONA !== '0'
+      : startupCfg.personaEnabled !== false,
+    // 开关落盘：否则重启网关又回到默认值，用户会以为开关没生效
+    onToggle: (v) => saveStartupConfigPatch(baseConfig.configFile, { personaEnabled: v }),
   }),
   meta: {
     version: config.version,

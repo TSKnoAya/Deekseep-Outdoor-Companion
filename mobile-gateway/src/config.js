@@ -195,6 +195,31 @@ export function readStartupConfig(file, log = () => {}) {
 }
 
 /**
+ * 合并写回启动配置（config.json）。
+ *
+ * 为什么不整份重写：里面可能有用户手写的 `dshInstall`、`listen` 等，
+ * 我们只想动自己那一两个键，其余原样保留。
+ */
+export function saveStartupConfigPatch(file, patch) {
+  let doc = {};
+  try {
+    const raw = fs.readFileSync(file, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object') doc = parsed;
+  } catch {
+    /* 不存在或坏了：就当空对象，下面会重新写一份干净的 */
+  }
+  const next = { ...doc, ...patch };
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(next, null, 2), 'utf8');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * 首次运行时写一份带注释的模板，让用户知道「有个地方可以改」。
  * 已存在就绝不动（那是用户的配置）。
  */

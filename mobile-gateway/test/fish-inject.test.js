@@ -100,3 +100,29 @@ test('forget 之后该会话重新算第一轮', () => {
   inj.forget('s1');
   assert.equal(inj.prepare('s1').reason, 'first');
 });
+
+test('开关落盘：setEnabled 会回调 onToggle（否则重启又回到默认开）', () => {
+  const calls = [];
+  const inj = createFishInjector({
+    dshHome: 'X:/dsh',
+    onToggle: (v) => calls.push(v),
+    buildContext: () => ({ ok: true, name: '鱼', text: 'x' }),
+    signature: () => 'a',
+  });
+  inj.setEnabled(false);
+  inj.setEnabled(true);
+  assert.deepEqual(calls, [false, true]);
+});
+
+test('persist:false 时只改内存，不写配置', () => {
+  const calls = [];
+  const inj = createFishInjector({
+    dshHome: 'X:/dsh',
+    onToggle: (v) => calls.push(v),
+    buildContext: () => ({ ok: true, name: '鱼', text: 'x' }),
+    signature: () => 'a',
+  });
+  inj.setEnabled(false, { persist: false });
+  assert.deepEqual(calls, []);
+  assert.equal(inj.isEnabled(), false);
+});

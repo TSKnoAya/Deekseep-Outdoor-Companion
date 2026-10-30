@@ -35,6 +35,8 @@ export function createFishInjector(options = {}) {
   const buildContext = options.buildContext ?? buildFishContext;
   const signature = options.signature ?? fishSignature;
   const base = { dshHome: options.dshHome, fsLike: options.fsLike };
+  /** 开关变了要落盘（否则重启网关又回到默认开） */
+  const onToggle = typeof options.onToggle === 'function' ? options.onToggle : null;
 
   let enabled = options.enabled !== false;
   /** sessionId → { sig, count } */
@@ -130,9 +132,16 @@ export function createFishInjector(options = {}) {
       };
     },
 
-    setEnabled(next) {
+    setEnabled(next, { persist = true } = {}) {
       enabled = Boolean(next);
       log(`角色上下文注入：${enabled ? '开' : '关'}`);
+      if (persist && onToggle) {
+        try {
+          onToggle(enabled);
+        } catch {
+          /* 写配置失败不该影响本次运行 */
+        }
+      }
       return enabled;
     },
   };
