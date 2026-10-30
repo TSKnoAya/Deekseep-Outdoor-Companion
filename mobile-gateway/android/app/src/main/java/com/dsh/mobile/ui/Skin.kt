@@ -43,7 +43,7 @@ object Skin {
 
     /** 气泡：自己（偏亮蓝）与对方（偏深）。都用半透明，让背景透一点出来。 */
     val BubbleUser = Color(0xE61D3A5C)
-    val BubbleBot = Color(0xCC102033)
+    val BubbleBot = Color(0xE6162A42)
     val BubbleError = Color(0xE63A1F22)
 
     /** 输入栏 / 顶栏的底：带透明度的深蓝，压住背景但不像一块黑板。 */

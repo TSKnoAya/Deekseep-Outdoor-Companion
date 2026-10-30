@@ -346,7 +346,11 @@ private fun MessageBubble(msg: ChatMessage, streaming: Boolean = false) {
         horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
     ) {
         Card(
-            colors = CardDefaults.cardColors(containerColor = bg),
+            colors = CardDefaults.cardColors(
+                containerColor = bg,
+                // 自定义底色推不出 onXxx 色，必须显式给，否则继承到黑色
+                contentColor = if (Skin.ENABLED) Skin.Ink else MaterialTheme.colorScheme.onSurface,
+            ),
             // 靠自己那边的上角切平一点：有"从这一侧说出来"的方向感
             shape = RoundedCornerShape(
                 topStart = if (isUser) 14.dp else 4.dp,
@@ -585,6 +589,17 @@ private fun SettingsDialog(state: AppState, vm: ChatViewModel, onClose: () -> Un
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+
+                // 皮肤美术是 CC BY-NC-SA 4.0，署名必须在 App 内可见（不只是仓库里）
+                if (Skin.ENABLED) {
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        "界面素材：深海女仆工坊（maid-atelier）· 角色原作 上善 · 二次设计 ZipZipPipe · 皮肤 Small-tailqwq，" +
+                            "CC BY-NC-SA 4.0（非商用）。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         },
         confirmButton = { TextButton(onClick = onClose) { Text("关闭") } },

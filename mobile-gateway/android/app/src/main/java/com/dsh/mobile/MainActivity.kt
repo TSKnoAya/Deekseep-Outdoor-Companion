@@ -53,8 +53,14 @@ class MainActivity : ComponentActivity() {
             MaterialTheme(colorScheme = colors) {
                 val state by vm.state.collectAsStateWithLifecycle()
                 if (Skin.ENABLED) {
-                    // 背景图在 Skin 里统一画；Scaffold 自己设成透明，别盖住图
-                    SkinBackdrop { ChatScreen(state = state, vm = vm) }
+                    // 背景图在 Skin 里统一画；Scaffold 自己设成透明，别盖住图。
+                    // 必须显式给 LocalContentColor：皮肤版没有 Surface 兜底，
+                    // 默认会落到 Color.Black —— 气泡里就成了黑字压深蓝（真机反馈过）。
+                    androidx.compose.runtime.CompositionLocalProvider(
+                        androidx.compose.material3.LocalContentColor provides Skin.Ink,
+                    ) {
+                        SkinBackdrop { ChatScreen(state = state, vm = vm) }
+                    }
                 } else {
                     Surface(color = MaterialTheme.colorScheme.background) {
                         ChatScreen(state = state, vm = vm)
