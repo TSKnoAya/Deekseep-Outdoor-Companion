@@ -17,8 +17,15 @@ import { createSherpaAsr } from './voice/asr-sherpa.js';
 import { createDeviceAsr } from './voice/asr-device.js';
 import { createVolcengineTts } from './voice/tts-volcengine.js';
 import { createGatewayServer } from './server.js';
-import { createSettingsStore, resolveConfig, parseListen } from './config.js';
-import { parseArgs, usage, isLoopbackHost, lanAddresses } from './cli.js';
+import {
+  createSettingsStore,
+  resolveConfig,
+  parseListen,
+  readStartupConfig,
+  ensureStartupConfigTemplate,
+} from './config.js';
+import { resolveDshPaths, notFoundHint } from './paths.js';
+import { parseArgs, usage, isLoopbackHost, isTailscaleIp, lanAddresses } from './cli.js';
 import { CODES, fail } from './errors.js';
 
 const stamp = () => new Date().toISOString().slice(11, 19);
@@ -44,9 +51,52 @@ if (args.listen !== null) {
   }
 }
 
-const config = resolveConfig(args.listen !== null ? { listen: args.listen } : {});
+// ── 三段配置合流：命令行 > 环境变量 > config.json > 自动探测 ──────────────
+const baseConfig = resolveConfig();
+const startupCfg = readStartupConfig(baseConfig.configFile, log);
+
+// DSH 装在哪不再写死盘符：显式目录 > 单文件环境变量 > config.json > 探测
+const resolved = resolveDshPaths({
+  dshDir: args.dshDir ?? null,
+  configDir: typeof startupCfg.dshInstall === 'string' ? startupCfg.dshInstall : null,
+  env: process.env,
+});
+
+if (resolved.missing.length > 0) {
+  console.error(notFoundHint(resolved.tried ?? []));
+  console.error('');
+  console.error(`缺少：${resolved.missing.join(' / ')}`);
+  process.exit(1);
+}
+
+// 首次运行写一份模板，让用户知道「有个文件可以改」（已存在绝不覆盖）
+ensureStartupConfigTemplate(baseConfig.configFile, {
+  _说明: '启动期配置，改完要重启网关；App 里能改的设置不在这里。路径会自动探测，探测失败才需要填 dshInstall',
+  _listen说明: '0.0.0.0 表示允许手机连进来；只想本机用就改成 127.0.0.1:8788',
+  dshInstall: resolved.installDir ?? '',
+  listen: '0.0.0.0:8788',
+});
+
+const listen =
+  args.listen ??
+  process.env.DSH_MOBILE_LISTEN ??
+  (typeof startupCfg.listen === 'string' && startupCfg.listen ? startupCfg.listen : null);
+
+const config = resolveConfig({
+  ...(listen ? { listen } : {}),
+  dshExe: resolved.exe,
+  dshCli: resolved.cli,
+  ...(resolved.sherpa ? { sherpaNative: resolved.sherpa } : {}),
+  ...(typeof startupCfg.defaultCwd === 'string' && startupCfg.defaultCwd
+    ? { defaultCwd: startupCfg.defaultCwd }
+    : {}),
+});
 const settings = createSettingsStore({ file: config.settingsFile, log });
 const devices = new DeviceStore({ file: config.devicesFile, log });
+log(`DSH 安装目录：${resolved.installDir ?? '(未知)'}（来源：${resolved.source}）`);
+if (resolved.warnings.length > 0) {
+  log(`提示：${resolved.warnings.join(' / ')} 缺失，只影响网关侧语音识别，收发消息不受影响`);
+}
 
 // ── 语音后端 ────────────────────────────────────────────────────────────
 const asr = new BackendRegistry('asr');
@@ -175,7 +225,11 @@ server.listen(port, host, () => {
     const lan = lanAddresses();
     if (lan.length > 0) {
       log('   手机端「网关地址」填下面这个：');
-      for (const ip of lan) log(`   http://${ip}:${port}`);
+      for (const ip of lan) {
+        // Tailscale 的地址段是 100.64.0.0/10：出门（4G/5G）也能用，值得单独标出来
+        const tag = isTailscaleIp(ip) ? '   ← Tailscale，外出也能用' : '';
+        log(`   http://${ip}:${port}${tag}`);
+      }
     } else {
       log('   没检测到局域网 IPv4 地址：先连上 Wi-Fi/网线，或用本机网卡 IP 手动拼地址');
     }

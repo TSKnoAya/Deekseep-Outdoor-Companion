@@ -319,3 +319,58 @@ node test/e2e-smoke.mjs          # 默认 8791 端口
 
 > 在第三条路走通之前，**手机上发消息会看到一条明确的错误**（`acp.turn-failed` + 上面那句英文），
 > 不会假装成功。这是有意的：宁可报错，也不要让用户以为「发了但 DSH 不理我」。
+
+---
+
+## 10. 2026-10-30 21:25–21:45 路径配置化（为「别人用自己的电脑」铺路）
+
+用户明确了两件事：
+1. 情景一要求**出门（4G/5G）也能用**；
+2. 情景二是「别人**只经过他自己的电脑**，不经过我的电脑」。
+
+第 2 条把「路径写死在我这台机器」变成了硬阻塞——别人装在不同的目录，网关直接起不来。
+
+### 10.1 改了什么
+
+| 改动 | 落点 |
+| --- | --- |
+| 新增安装位置探测 | `src/paths.js`：`candidateDirs()` / `detectInstall()` / `resolveDshPaths()` |
+| 三处硬编码路径删除 | `src/config.js` 不再有 `D:/deepseek/...`，改为 `null` 交给探测 |
+| 新增启动配置 `config.json` | `~/.dsh/mobile-gateway/config.json`（`dshInstall` / `listen` / `defaultCwd`），首次运行自动写模板，已存在绝不覆盖；坏文件隔离后按默认启动 |
+| 新增 `--dsh-dir` | 探测不到时手动指定；优先级：命令行 > 环境变量 > config.json > 探测 |
+| 启动横幅 | 打印 `DSH 安装目录：…（来源：detect/arg/config/env-dir/env-file）`，Tailscale 地址单独标注 `← Tailscale，外出也能用` |
+| 新增 16 条路径测试 | `test/paths.test.js`（注入假 fs，能证明「装在 C 盘也认得出」） |
+| 出门方案文档 | 新增 `docs/TAILSCALE.md` |
+
+### 10.2 探测顺序
+
+1. `--dsh-dir` → 2. `DSH_DIR`/`DSH_INSTALL_DIR` → 3. `DSH_EXE`/`DSH_ACP_CLI`/`DSH_SHERPA_NATIVE`（单文件覆盖）
+→ 4. `config.json` 的 `dshInstall` → 5. 自动探测：
+`%LOCALAPPDATA%\Programs\DeepSeek Harness`、`%PROGRAMFILES%\...`、`%USERPROFILE%\Desktop\...`、
+C 到 H 各盘下的 `deepseek` / `DeepSeek` / `dsh` 目录，最后兜底扫各盘根下名字像 deepseek 的文件夹。
+
+### 10.3 顺带修掉的一个真 bug：判断 asar 里的文件
+
+第一版探测在本机就报「找不到 cli」——因为 `cli.js` 打在 `app.asar` 里，
+**普通 Node fs 看不进 asar**，`existsSync` 恒为 false，可它其实完全能用（Electron 能读）。
+现在 `isInsideAsar()` 把 asar 内路径排除在「存在性判断」之外，`app.asar.unpacked` 仍按真实目录判断。
+（这是必须记的一条：**asar 内的路径不能拿 fs 判存在**。）
+
+### 10.4 验证
+
+- `node test/run-all.js` → **114/114**（新增 16 条路径测试 + 补 asar 用例）。
+- 本机实测：`DSH 安装目录：D:/deepseek（来源：detect）`，自动写出的 `config.json`
+  内容为 `{"dshInstall":"D://deepseek","listen":"0.0.0.0:8788"}`。
+- 优先级实测：`--listen 127.0.0.1:8793` 覆盖了 config.json 里的 `0.0.0.0:8788`。
+- `/v1/health` 返回 `dsh.connected=true`；未带令牌访问 `/v1/sessions` → **401**（鉴权仍然有效）。
+- e2e 冒烟回归：链路仍通，**仍然卡在 provider key**（§9.4，未变）。
+
+### 10.5 还没做的（距「发布给别人用」还差什么）
+
+| 还差 | 说明 |
+| --- | --- |
+| release 签名 | 现在只有 debug 签名，不能正经分发 |
+| 首次启动向导 | 现在靠终端文案；普通用户需要 App 内引导（装 DSH → 填地址 → 配对） |
+| 模型密钥 | 每个用户自己的 DSH 要有可用 provider route，否则发消息必失败（§9.4） |
+| 网络方案 | 自用走 Tailscale（`docs/TAILSCALE.md`）；给别人用得靠「用户各自搭」或做中转服务 |
+| 后台常驻 | 网关没有开机自启/守护，关窗口就停 |

@@ -151,22 +151,62 @@ export function resolveConfig(overrides = {}) {
     /** 监听地址。默认回环；要让手机连必须显式改（并且有设备令牌） */
     listen: overrides.listen || process.env.DSH_MOBILE_LISTEN || '127.0.0.1:8788',
     stateDir,
+    /** 启动配置（只放改了要重启的东西；与 App 侧 settings.json 分开） */
+    configFile: overrides.configFile || path.join(stateDir, 'config.json'),
     devicesFile: overrides.devicesFile || path.join(stateDir, 'devices.json'),
     settingsFile: overrides.settingsFile || path.join(stateDir, 'settings.json'),
     modelsDir: overrides.modelsDir || path.join(stateDir, 'models'),
-    /** DSH 可执行文件与 ACP 启动器 */
-    dshExe: overrides.dshExe || process.env.DSH_EXE ||
-      'D:\\deepseek\\DeepSeek Harness.exe',
-    dshCli: overrides.dshCli || process.env.DSH_ACP_CLI ||
-      'D:\\deepseek\\resources\\app.asar\\dsh\\node_modules\\@deepseek-ai\\dsh-desktop-host\\lib\\cli.js',
+    /** DSH 可执行文件与 ACP 启动器。留空由 paths.js 探测，不要再写死盘符 */
+    dshExe: overrides.dshExe || process.env.DSH_EXE || null,
+    dshCli: overrides.dshCli || process.env.DSH_ACP_CLI || null,
     dshHome: overrides.dshHome ?? process.env.DSH_HOME ?? null,
     /** 新建会话时用的工作目录 */
     defaultCwd: overrides.defaultCwd || process.cwd(),
     /** sherpa 原生模块 */
-    sherpaNative: overrides.sherpaNative || process.env.DSH_SHERPA_NATIVE ||
-      'D:\\deepseek\\resources\\app.asar.unpacked\\dsh\\node_modules\\sherpa-onnx-win-x64\\sherpa-onnx.node',
+    sherpaNative: overrides.sherpaNative || process.env.DSH_SHERPA_NATIVE || null,
     version: overrides.version || '0.1.0',
   };
+}
+
+/**
+ * 读启动配置 `config.json`。坏了就隔离后当空配置——**不能让它挡住启动**。
+ *
+ * 存在的理由：给「别人装在自己电脑上」用。默认值只够我这一台机器，
+ * 用户得有地方改（又不能逼他学环境变量）。
+ *
+ * @param {string} file
+ * @param {(msg:string)=>void} [log]
+ * @returns {{listen?:string,dshInstall?:string,defaultCwd?:string}}
+ */
+export function readStartupConfig(file, log = () => {}) {
+  try {
+    const doc = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return doc && typeof doc === 'object' ? doc : {};
+  } catch (e) {
+    if (e?.code === 'ENOENT') return {};
+    log(`启动配置损坏（${e?.message}），已隔离，按默认值启动`);
+    try {
+      fs.renameSync(file, `${file}.broken-${Date.now()}`);
+    } catch {
+      /* ignore */
+    }
+    return {};
+  }
+}
+
+/**
+ * 首次运行时写一份带注释的模板，让用户知道「有个地方可以改」。
+ * 已存在就绝不动（那是用户的配置）。
+ */
+export function ensureStartupConfigTemplate(file, sample) {
+  try {
+    if (fs.existsSync(file)) return false;
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(sample, null, 2), 'utf8');
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**

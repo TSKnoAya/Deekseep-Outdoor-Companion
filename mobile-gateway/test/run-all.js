@@ -26,6 +26,7 @@ const FILES = [
   'cli.test.js',
   'devices.test.js',
   'errors-audio.test.js',
+  'paths.test.js',
   'server.test.js',
 ];
 

@@ -12,7 +12,7 @@ import os from 'node:os';
 
 /** 启动参数默认值。 */
 export function parseArgs(argv = []) {
-  const out = { listen: null, help: false, pair: false };
+  const out = { listen: null, help: false, pair: false, dshDir: null };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     if (a === '--help' || a === '-h') {
@@ -26,6 +26,12 @@ export function parseArgs(argv = []) {
       i += 1;
     } else if (a.startsWith('--listen=')) {
       out.listen = a.slice('--listen='.length);
+    } else if (a === '--dsh-dir') {
+      // 别人电脑上 DSH 装在哪我不知道，探测不到就得让他指一下
+      out.dshDir = argv[i + 1] ?? '';
+      i += 1;
+    } else if (a.startsWith('--dsh-dir=')) {
+      out.dshDir = a.slice('--dsh-dir='.length);
     }
     // 其它参数忽略：网关不该因为一个手滑的空格就起不来
   }
@@ -42,19 +48,30 @@ export function usage() {
     '  --listen host:port   监听地址，默认 127.0.0.1:8788',
     '                       手机要连进来必须用 0.0.0.0:8788（或本机网卡 IP）',
     '  --pair               强制生成一个新的 6 位配对码并打印（换手机/重装 App 时用）',
+    '  --dsh-dir <目录>     DSH 安装目录（里面有 "DeepSeek Harness.exe"）。',
+    '                       探测不到时用它指定；也可以写进 config.json 的 dshInstall',
     '  -h, --help           显示本帮助',
     '',
-    '等价环境变量：DSH_MOBILE_LISTEN=0.0.0.0:8788',
+    '等价环境变量：DSH_MOBILE_LISTEN / DSH_DIR / DSH_EXE / DSH_ACP_CLI',
     '',
     '示例：',
     '  node src/main.js --listen 0.0.0.0:8788',
     '  node src/main.js --listen 0.0.0.0:8788 --pair',
+    '  node src/main.js --dsh-dir "C:\\Program Files\\DeepSeek Harness"',
   ].join('\n');
 }
 
 /** 是不是回环地址（手机永远连不到这些）。 */
 export function isLoopbackHost(host) {
   return host === '127.0.0.1' || host === 'localhost' || host === '::1';
+}
+
+/** 是不是 Tailscale 的地址（100.64.0.0/10，shared address space）。 */
+export function isTailscaleIp(ip) {
+  const m = String(ip).match(/^100\.(\d+)\./);
+  if (!m) return false;
+  const second = Number(m[1]);
+  return second >= 64 && second <= 127;
 }
 
 /**

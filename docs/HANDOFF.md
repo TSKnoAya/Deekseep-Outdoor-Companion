@@ -5,6 +5,52 @@
 
 ---
 
+## 快照：2026-10-30 21:25–21:45（路径配置化：别人用自己的电脑也能跑）
+
+### 用户要求
+
+> 「情景一：我外出后手机连家里 DSH…情景二：把 app 发布，别人也能按这个步骤配置使用」
+> 「别人在使用这个 app 时，不经过我的电脑，只经过他自己的电脑」
+
+第 2 条把「DSH 路径写死在我这台机器」变成硬阻塞：别人装在 C 盘、
+`%LOCALAPPDATA%\Programs\...`，网关直接起不来。
+
+### 改了什么
+
+| 改动 | 落点 |
+| --- | --- |
+| 新增安装位置探测 | 新增 `src/paths.js`（`candidateDirs` / `detectInstall` / `resolveDshPaths` / `isInsideAsar` / `notFoundHint`） |
+| 删掉三处硬编码 `D:\deepseek\...` | `src/config.js` 改为 `null`，交给探测 |
+| 新增启动配置 `config.json` | `~/.dsh/mobile-gateway/config.json`；首次运行写模板，已存在不覆盖，坏文件隔离 |
+| 新增 `--dsh-dir` | 优先级：命令行 > 环境变量 > config.json > 探测 |
+| 启动横幅 | 打印 `DSH 安装目录（来源：detect/arg/config/env-*）`；Tailscale 地址标 `← Tailscale，外出也能用` |
+| 出门方案 | 新增 `mobile-gateway/docs/TAILSCALE.md`（含"为什么不建议直接把 8788 开公网"） |
+| 测试 | 新增 `test/paths.test.js`（16 条，注入假 fs）→ **114/114** |
+
+### 已验证
+
+- `node test/run-all.js` → **114/114**。
+- 本机：`DSH 安装目录：D:\deepseek（来源：detect）`，自动生成
+  `config.json = {"dshInstall":"D:\\deepseek","listen":"0.0.0.0:8788"}`。
+- 优先级：`--listen 127.0.0.1:8793` 覆盖 config.json 的 `0.0.0.0:8788` ✅
+- `/v1/health` → `dsh.connected=true`；无令牌 `/v1/sessions` → 401 ✅
+- e2e 回归：链路仍通，**仍卡在 provider key**（阻塞未变，见下）。
+
+### 顺带修的真 bug
+
+第一版探测在本机就报「找不到 cli」：`cli.js` 打在 `app.asar` 里，**普通 Node fs 看不进 asar**，
+`existsSync` 恒为 false，但它其实可用。现 `isInsideAsar()` 把它排除在存在性判断外。
+**记一条**：asar 内路径不能拿 fs 判存在。
+
+### 没验证 / 阻塞
+
+- **模型密钥仍是第一阻塞**：`llm-deepseek: no API key for provider route "deepseek-official"`。
+  每个用户都要自己解决（否则他的手机发消息必失败）。三条出路见 case 文档 §9.4，待用户拍板。
+- 出门方案只写了文档（Tailscale），**没实测过 4G 下连**（需要手机+账号，得用户自己走一遍）。
+- 距「发布」还差：release 签名、首次启动向导、后台常驻（case 文档 §10.5）。
+
+---
+
 ## 快照：2026-10-30 21:00–21:20（网关地址/配对码入口 + `--listen`/`--pair` + 端到端冒烟）
 
 ### 用户要求

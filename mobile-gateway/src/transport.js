@@ -15,10 +15,17 @@
 import { spawn } from 'node:child_process';
 import { fail, CODES } from './errors.js';
 
-/** DSH 桌面端自带的 ACP 启动器路径（与 `runtime/cli/bin/dsh.cmd` 等价）。 */
-export const DEFAULT_DSH_EXE = 'D:\\deepseek\\DeepSeek Harness.exe';
-export const DEFAULT_DSH_CLI =
-  'D:\\deepseek\\resources\\app.asar\\dsh\\node_modules\\@deepseek-ai\\dsh-desktop-host\\lib\\cli.js';
+/**
+ * DSH 路径**不再有默认值**。
+ *
+ * 早期这里写死了 `D:\deepseek\...`——那只是开发者机器的安装位置。别人装到
+ * `%LOCALAPPDATA%\Programs\...` 时，这套默认值会让网关去 spawn 一个不存在的文件，
+ * 报错还是「启动 DSH 失败」，用户完全不知道从哪改。
+ *
+ * 现在路径一律由 `paths.js` 探测后显式传入；没传就是调用方的 bug，直接说清楚。
+ */
+export const DEFAULT_DSH_EXE = null;
+export const DEFAULT_DSH_CLI = null;
 
 /**
  * 用 DSH 自带的 Electron 运行时跑 ACP profile。
@@ -39,6 +46,14 @@ export function spawnTransport(options = {}) {
   const cli = options.cli || DEFAULT_DSH_CLI;
   const profile = options.profile || 'acp';
   const log = options.log || (() => {});
+
+  if (!exe || !cli) {
+    // 调用方没传路径：以前会静默用写死的 D 盘路径，现在必须显式失败
+    throw fail(CODES.ACP_SPAWN_FAILED, '没有 DSH 可执行文件或 ACP 启动器路径', {
+      hint: '用 --dsh-dir 指定 DSH 安装目录，或在 config.json 里填 dshInstall（paths.js 也会自动探测）。',
+      details: { exe: exe ?? null, cli: cli ?? null },
+    });
+  }
 
   let child;
   try {
