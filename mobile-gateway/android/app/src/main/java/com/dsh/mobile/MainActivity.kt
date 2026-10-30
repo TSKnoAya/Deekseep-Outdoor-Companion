@@ -18,6 +18,8 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.dsh.mobile.ui.ChatScreen
 import com.dsh.mobile.ui.ChatViewModel
+import com.dsh.mobile.ui.Skin
+import com.dsh.mobile.ui.SkinBackdrop
 
 class MainActivity : ComponentActivity() {
     private val vm: ChatViewModel by viewModels()
@@ -36,7 +38,10 @@ class MainActivity : ComponentActivity() {
         }
         setContent {
             val dark = isSystemInDarkTheme()
-            val colors = if (dark) darkColorScheme(
+            // 皮肤开启时统一走深海暗色（亮色背景与这套美术不搭，且对比度不成立）
+            val colors = if (Skin.ENABLED) {
+                Skin.colorScheme()
+            } else if (dark) darkColorScheme(
                 primary = Color(0xFF4FC3F7),
                 background = Color(0xFF0B1B2B),
                 surface = Color(0xFF12263A),
@@ -46,9 +51,14 @@ class MainActivity : ComponentActivity() {
                 surface = Color(0xFFFFFFFF),
             )
             MaterialTheme(colorScheme = colors) {
-                Surface(color = MaterialTheme.colorScheme.background) {
-                    val state by vm.state.collectAsStateWithLifecycle()
-                    ChatScreen(state = state, vm = vm)
+                val state by vm.state.collectAsStateWithLifecycle()
+                if (Skin.ENABLED) {
+                    // 背景图在 Skin 里统一画；Scaffold 自己设成透明，别盖住图
+                    SkinBackdrop { ChatScreen(state = state, vm = vm) }
+                } else {
+                    Surface(color = MaterialTheme.colorScheme.background) {
+                        ChatScreen(state = state, vm = vm)
+                    }
                 }
             }
         }

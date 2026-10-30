@@ -5,6 +5,35 @@
 
 ---
 
+## 快照：2026-10-31 01:00–01:25（P1「把鱼带到手机」+ 深海皮肤）
+
+### 做了什么
+
+| 事 | 结果 |
+| --- | --- |
+| 角色上下文注入（只读） | `src/fish-context.js` + `src/fish-inject.js`：网关在**每会话第一轮**把 `persona.md` + `memory-card-prompt-qq.md` 拼在用户消息前；记忆变了再注入；最多 4 次 |
+| 设置页开关 | 插件新增 ④ 卡片（状态/角色/字数/已生效会话 + 开关），走 `/admin/persona`（仅本机回环） |
+| 手机皮肤 | 取本机皮肤包 `maid-atelier` 的暗色宫殿/立绘/徽章 → `skin_bg` / `skin_mascot` / `skin_chibi` / `skin_emblem`；`ui/Skin.kt` 集中调色板，`Skin.ENABLED=false` 一键回退 |
+
+### 验证
+
+- `已注入角色上下文（first）：傲娇助手`；手机问「昨天群里聊了什么」→ 答出记忆卡里的具体事件，语气对得上人格。
+- 第二轮 `already` 不重复注入；记忆被 SurfCore 更新后 `memory-changed` 再注入。
+- 单测 **142/142**（新增 fish-context 8 条 + fish-inject 9 条）；注入前言**未**污染记忆卡。
+
+### 重要结论
+
+**P2「回写」不用网关做**：手机这一轮已被 SurfCore 自己的管线写进 `memory-card-*.md`。
+网关只读不写，单一写入者原则天然成立。
+
+### 待确认
+
+皮肤观感（手机锁屏截不到图）、设置页 ④（需重启 DSH）。
+素材 **CC BY-NC-SA 4.0：禁商用、需署名** —— 上善 / ZipZipPipe / Small-tailqwq。
+
+---
+
+
 ## 快照：2026-10-30 23:09–23:20（配对成功后的 unknown session + 沉浸式全屏）
 
 ### 用户要求

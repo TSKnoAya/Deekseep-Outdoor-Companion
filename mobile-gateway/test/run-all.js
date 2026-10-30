@@ -27,6 +27,8 @@ const FILES = [
   'cli.test.js',
   'devices.test.js',
   'errors-audio.test.js',
+  'fish-context.test.js',
+  'fish-inject.test.js',
   'paths.test.js',
   'server.test.js',
 ];

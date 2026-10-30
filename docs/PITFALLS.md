@@ -2910,3 +2910,15 @@ Node 读文件后删除；不再解析 stdout。所有「浏览…」共用此�
   （已配对就不再自动打码，避免「重启即拿码」）。`test/cli.test.js` 14 条钉住文案与能力一致。
 - **教训**：**文案里出现的命令必须真能跑，并且要有测试跑它**。涉及"人怎么进来"的入口
   （地址、端口、配对码）不能只有一次性路径——重装/换机/过期都是必然事件。
+
+## 本机回环调试被系统代理劫持 / 锁屏截图全黑
+
+- **现象一**：`curl http://127.0.0.1:8797/admin/status` 返回
+  `502 Bad Gateway: upstream connect failed (os error 10061)`，可网关明明在跑。
+  **根因**：这台机器装了系统代理（127.0.0.1:13306），`curl` 把回环请求也交给代理了。
+  **修法**：`curl --noproxy '*' ...`。凡是打本机端口的脚本/文档命令都要带上。
+- **现象二**：`adb shell screencap` 拉下来的图全黑，`ls` 看只有 15KB。
+  **判据**：`dumpsys window | grep mCurrentFocus` 显示 `NotificationShade` = 锁屏。
+  **修法**：先 `input keyevent KEYCODE_WAKEUP` + `wm dismiss-keyguard`；
+  有密码时只能请用户解锁（MIUI 还禁止 `adb shell input tap`，INJECT_EVENTS 权限）。
+- **教训**：自动化验证到不了的两层——**系统代理**和**锁屏**。两者都会伪装成"服务挂了"。

@@ -1,5 +1,7 @@
 package com.dsh.mobile.ui
 
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -49,6 +51,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -62,7 +65,9 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.sp
+import com.dsh.mobile.R
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -80,22 +85,41 @@ fun ChatScreen(state: AppState, vm: ChatViewModel) {
         // 是 Scaffold 单独放在屏幕底部的，仍然被键盘压住（真机反馈过）。
         // 正确位置是 Scaffold 自己 —— 它带着 topBar 和 bottomBar 一起抬起来。
         modifier = Modifier.imePadding(),
+        // 背景图在 SkinBackdrop 里画；Scaffold 不刷底色，否则整张图被盖掉
+        containerColor = if (Skin.ENABLED) Color.Transparent else MaterialTheme.colorScheme.background,
         // 系统栏由 topBar / bottomBar 各自处理，避免和上面的 imePadding 重复计算
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         topBar = {
             TopAppBar(
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = if (Skin.ENABLED) Skin.Chrome else MaterialTheme.colorScheme.surface,
+                    titleContentColor = MaterialTheme.colorScheme.onSurface,
+                ),
                 title = {
-                    Column {
-                        Text("DSH", style = MaterialTheme.typography.titleMedium)
-                        Text(
-                            subtitle(state),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = when {
-                                state.streamLostReason != null -> MaterialTheme.colorScheme.error
-                                state.dshConnected -> MaterialTheme.colorScheme.onSurfaceVariant
-                                else -> MaterialTheme.colorScheme.error
-                            },
-                        )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (Skin.ENABLED) {
+                            Image(
+                                painter = painterResource(R.drawable.skin_emblem),
+                                contentDescription = null,
+                                modifier = Modifier.height(28.dp).width(20.dp),
+                            )
+                            Spacer(Modifier.width(8.dp))
+                        }
+                        Column {
+                            Text(
+                                if (Skin.ENABLED) "深海工坊" else "DSH",
+                                style = MaterialTheme.typography.titleMedium,
+                            )
+                            Text(
+                                subtitle(state),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = when {
+                                    state.streamLostReason != null -> MaterialTheme.colorScheme.error
+                                    state.dshConnected -> MaterialTheme.colorScheme.onSurfaceVariant
+                                    else -> MaterialTheme.colorScheme.error
+                                },
+                            )
+                        }
                     }
                 },
                 actions = {
@@ -313,9 +337,9 @@ private fun MessageBubble(msg: ChatMessage, streaming: Boolean = false) {
     val isUser = msg.role == Role.User
     val isError = msg.role == Role.Error
     val bg = when {
-        isError -> MaterialTheme.colorScheme.errorContainer
-        isUser -> MaterialTheme.colorScheme.primaryContainer
-        else -> MaterialTheme.colorScheme.surfaceVariant
+        isError -> if (Skin.ENABLED) Skin.BubbleError else MaterialTheme.colorScheme.errorContainer
+        isUser -> if (Skin.ENABLED) Skin.BubbleUser else MaterialTheme.colorScheme.primaryContainer
+        else -> if (Skin.ENABLED) Skin.BubbleBot else MaterialTheme.colorScheme.surfaceVariant
     }
     Row(
         Modifier.fillMaxWidth(),
@@ -323,7 +347,14 @@ private fun MessageBubble(msg: ChatMessage, streaming: Boolean = false) {
     ) {
         Card(
             colors = CardDefaults.cardColors(containerColor = bg),
-            shape = RoundedCornerShape(14.dp),
+            // 靠自己那边的上角切平一点：有"从这一侧说出来"的方向感
+            shape = RoundedCornerShape(
+                topStart = if (isUser) 14.dp else 4.dp,
+                topEnd = if (isUser) 4.dp else 14.dp,
+                bottomStart = 14.dp,
+                bottomEnd = 14.dp,
+            ),
+            border = if (Skin.ENABLED) BorderStroke(1.dp, if (isUser) Skin.Gold.copy(alpha = 0.45f) else Skin.GoldDim) else null,
             modifier = Modifier.fillMaxWidth(if (isUser) 0.86f else 1f),
         ) {
             Column(Modifier.padding(10.dp)) {
@@ -354,8 +385,17 @@ private fun MessageBubble(msg: ChatMessage, streaming: Boolean = false) {
 private fun EmptyState() {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text("👋", fontSize = 32.sp)
-            Spacer(Modifier.height(8.dp))
+            if (Skin.ENABLED) {
+                // Q 版只放在空状态：正常聊天时它不该挡在文字后面
+                Image(
+                    painter = painterResource(R.drawable.skin_chibi),
+                    contentDescription = null,
+                    modifier = Modifier.size(132.dp),
+                )
+            } else {
+                Text("👋", fontSize = 32.sp)
+            }
+            Spacer(Modifier.height(10.dp))
             Text(
                 "说点什么，或者按住麦克风说话",
                 style = MaterialTheme.typography.bodyMedium,
@@ -418,7 +458,10 @@ private fun ApprovalCard(approval: ApprovalUi, onAnswer: (String) -> Unit) {
 
 @Composable
 private fun Composer(state: AppState, vm: ChatViewModel) {
-    Surface(color = MaterialTheme.colorScheme.surface, tonalElevation = 2.dp) {
+    Surface(
+        color = if (Skin.ENABLED) Skin.Chrome else MaterialTheme.colorScheme.surface,
+        tonalElevation = if (Skin.ENABLED) 0.dp else 2.dp,
+    ) {
         Row(
             // navigationBarsPadding：沉浸式下导航栏平时是隐藏的（inset 为 0），
             // 但用户上滑唤出时会临时出现，那时不能让输入框被压住。

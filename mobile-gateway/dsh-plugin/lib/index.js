@@ -124,6 +124,29 @@ export function apply(ctx) {
   });
 
   /**
+   * 「角色上下文」：把手上的鱼（SurfCore 的人格卡 + 记忆卡）带到手机。
+   *
+   * 插件只做转发：真正读文件、决定注入时机的是网关——
+   * 因为只有网关知道「这一轮是第几轮」「上一个前缀还在不在上下文里」。
+   */
+  route('GET', `${API}/persona`, async () => {
+    const { body } = await callGateway('/admin/persona');
+    if (!body?.ok) throw fail('gateway.error', body?.error ?? '读不到角色上下文状态', {});
+    return body;
+  });
+
+  route('PUT', `${API}/persona`, async (req) => {
+    const payload = await readBody(req);
+    requireThat(typeof payload?.enabled === 'boolean', CODES.BAD_REQUEST, 'enabled 要传 true / false', {});
+    const { body } = await callGateway('/admin/persona', {
+      method: 'PUT',
+      body: JSON.stringify({ enabled: payload.enabled }),
+    });
+    if (!body?.ok) throw fail('gateway.error', body?.error ?? '改不动角色上下文开关', {});
+    return body;
+  });
+
+  /**
    * DSH 里*真正可用*的 provider / model 清单。
    *
    * 用 `ctx.llm`（DSH 的 LLM 注册表）：provider 是已加载的适配器，

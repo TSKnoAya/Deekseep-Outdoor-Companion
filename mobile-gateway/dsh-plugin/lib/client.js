@@ -110,8 +110,20 @@ window.__ModuleLoader__.load({
           setCatalog([]);
           setCatalogErr(c?.hint || c?.error || "取不到可选模型清单");
         }
+        // 角色上下文（「把鱼带到手机」）：拿不到就整块提示，不影响上面几块
+        const p = await api("/persona");
+        if (p?.ok) {
+          setPersona(p);
+          setPersonaErr("");
+        } else {
+          setPersona(null);
+          setPersonaErr(p?.hint || p?.error || "读不到角色上下文状态");
+        }
         setBusy("");
       }, []);
+
+      const [persona, setPersona] = useState(null);
+      const [personaErr, setPersonaErr] = useState("");
 
       useEffect(() => {
         refresh();
@@ -155,6 +167,23 @@ window.__ModuleLoader__.load({
           refresh();
         } else {
           setErr(r?.hint || r?.error || "保存失败");
+        }
+      };
+
+      const togglePersona = async () => {
+        setBusy("persona");
+        setErr("");
+        setNote("");
+        const r = await api("/persona", {
+          method: "PUT",
+          body: JSON.stringify({ enabled: !persona?.enabled }),
+        });
+        setBusy("");
+        if (r?.ok) {
+          setPersona(r);
+          setNote(r.enabled ? "已开启：手机的对话会带上这个角色的人格与记忆。" : "已关闭：手机只当普通助手，不带角色。");
+        } else {
+          setErr(r?.hint || r?.error || "改不动这个开关");
         }
       };
 
@@ -275,6 +304,32 @@ window.__ModuleLoader__.load({
             h("button", { style: btn(), onClick: saveModel, disabled: !running || busy === "save" || !provider || !modelName },
               busy === "save" ? "保存中…" : "保存并生效"),
             model?.file ? h("span", { style: { ...label, marginBottom: 0, ...mono, fontSize: "11px", wordBreak: "break-all", maxWidth: "60%" } }, model.file) : null)),
+
+        // ④ 角色上下文（「把鱼带到手机」）
+        h("div", { style: box },
+          h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" } },
+            h("strong", { style: { fontSize: "13px" } }, "④ 手机上是「哪条鱼」"),
+            h("button", {
+              style: btn({ padding: "4px 12px", fontSize: "12px" }),
+              onClick: togglePersona,
+              disabled: !running || !persona?.available || busy === "persona",
+            }, busy === "persona" ? "切换中…" : (persona?.enabled ? "关闭" : "开启"))),
+          personaErr
+            ? h("p", { style: { ...label, margin: 0, color: "#d29922", lineHeight: 1.6 } }, personaErr)
+            : !persona?.available
+              ? h("p", { style: { ...label, margin: 0, lineHeight: 1.6 } },
+                  "没找到 SurfCore 的角色（",
+                  persona?.reason === "no-character" ? "还没创建角色" : (persona?.reason || "未安装"),
+                  "）。装好 SurfCore 并选中一个角色后，这里会出现它的名字。")
+              : h("div", null,
+                  h(Row, { k: "状态", v: persona.enabled ? "已开启" : "已关闭", tone: persona.enabled ? "#3fb950" : undefined }),
+                  h(Row, { k: "角色", v: persona.character || "?" }),
+                  h(Row, { k: "注入内容", v: `人格 ${persona.personaChars} 字 + 记忆 ${persona.memoryChars} 字${persona.truncated ? "（已截断）" : ""}` }),
+                  h(Row, { k: "已生效会话", v: (persona.sessions || []).length ? `${persona.sessions.length} 个` : "还没有（发第一条消息时生效）" }),
+                  h("p", { style: { ...label, margin: "8px 0 0", lineHeight: 1.65 } },
+                    "开启后，手机发的第一条消息会带上这条鱼的人格卡与记忆卡，此后它记得的事和 QQ 上是同一份。",
+                    h("br"),
+                    "第一轮之后不会每轮重复注入（省 token，也避免它把设定当成反复叮嘱）；电脑上的记忆更新时，会自动再注入一次。"))),
 
         note ? h("div", { style: { padding: "9px 12px", borderRadius: "8px", background: "rgba(63,185,80,.12)", fontSize: "12.5px" } }, note) : null,
         (err || statusErr) ? h("div", { style: { padding: "9px 12px", borderRadius: "8px", background: "rgba(248,81,73,.12)", fontSize: "12.5px", marginTop: "8px" } }, err || statusErr) : null,

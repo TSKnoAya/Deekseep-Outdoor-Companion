@@ -26,6 +26,7 @@ import {
   ensureStartupConfigTemplate,
 } from './config.js';
 import { resolveDshPaths, notFoundHint } from './paths.js';
+import { createFishInjector } from './fish-inject.js';
 import { parseArgs, usage, isLoopbackHost, isTailscaleIp, lanAddresses } from './cli.js';
 import { CODES, fail } from './errors.js';
 
@@ -219,6 +220,12 @@ const server = createGatewayServer({
   tts,
   settings,
   log,
+  // 「把鱼带到手机」：只在装了 SurfCore 且有当前角色时生效；`DSH_MOBILE_PERSONA=0` 可关
+  fish: createFishInjector({
+    dshHome,
+    log,
+    enabled: process.env.DSH_MOBILE_PERSONA !== '0',
+  }),
   meta: {
     version: config.version,
     dshExe: config.dshExe,

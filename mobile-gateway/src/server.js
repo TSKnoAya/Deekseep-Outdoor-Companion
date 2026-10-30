@@ -79,6 +79,8 @@ export function createGatewayServer(deps) {
       if (pathname === '/admin/reload' && req.method === 'POST') return handleAdminReload(req, res);
       if (pathname === '/admin/acp-model' && req.method === 'GET') return handleAdminGetModel(req, res);
       if (pathname === '/admin/acp-model' && req.method === 'PUT') return handleAdminPutModel(req, res);
+      if (pathname === '/admin/persona' && req.method === 'GET') return handleAdminGetPersona(req, res);
+      if (pathname === '/admin/persona' && req.method === 'PUT') return handleAdminPutPersona(req, res);
       return sendJson(res, toFailure(fail(CODES.NOT_FOUND, `没有这个管理接口：${pathname}`, {})), 404);
     }
 
@@ -190,6 +192,25 @@ export function createGatewayServer(deps) {
     sendJson(res, ok(result ?? { reloaded: true }));
   }
 
+  /**
+   * 角色上下文（「把鱼带到手机」）的开关与状态。
+   *
+   * 默认开着，但只在**装了 SurfCore 且有当前角色**时才真的生效；
+   * 没装的人拿到 `available:false`，不影响任何东西。
+   */
+  function handleAdminGetPersona(req, res) {
+    if (!deps.fish) return sendJson(res, ok({ enabled: false, available: false, reason: 'not-wired' }));
+    sendJson(res, ok(deps.fish.status()));
+  }
+
+  async function handleAdminPutPersona(req, res) {
+    requireThat(Boolean(deps.fish), CODES.BAD_REQUEST, '这个网关版本没接角色上下文', {});
+    const body = await readJson(req, MAX_JSON_BODY);
+    requireThat(typeof body.enabled === 'boolean', CODES.BAD_REQUEST, 'enabled 必须是 true/false', {});
+    deps.fish.setEnabled(body.enabled);
+    sendJson(res, ok(deps.fish.status()));
+  }
+
   function handleAdminGetModel(req, res) {
     const dshHome = deps.admin?.dshHome;
     requireThat(Boolean(dshHome), CODES.BAD_REQUEST, '网关不知道自己属于哪个 DSH_HOME', {});
@@ -272,6 +293,13 @@ export function createGatewayServer(deps) {
     const text = String(body.text ?? '').trim();
     requireThat(text.length > 0, CODES.BAD_REQUEST, '消息内容是空的', {});
 
+    // 「把鱼带到手机」：把角色人格 + 记忆卡拼在这轮消息前面。
+    //
+    // 注意这段前缀**只发给 DSH**，不会进手机的气泡——手机显示的用户消息是它自己
+    // 发出去的那句；SSE 里也只有模型回的字。所以用户不会看到一坨设定文本。
+    const prepared = body.noPersona === true ? null : deps.fish?.prepare(sessionId) ?? null;
+    const promptText = prepared?.prefix ? `${prepared.prefix}\n\n---\n\n${text}` : text;
+
     const submitted = deps.hub.submit(sessionId, async (ctx) => {
       // 审批请求要挂到 registry 上，并推给手机。
       //
@@ -294,9 +322,11 @@ export function createGatewayServer(deps) {
 
       const result = await acp.prompt({
         sessionId,
-        text,
+        text: promptText,
         onText: (chunk) => ctx.emit({ type: 'text', text: chunk }),
       });
+      // 只有这一轮真的跑完才记账；失败重试时前缀还得再带上
+      deps.fish?.commit(sessionId, prepared);
       return { stopReason: result.stopReason, text: result.text };
     });
 
@@ -314,6 +344,7 @@ export function createGatewayServer(deps) {
     const acp = requireAcp();
     deps.approvals.clearSession(sessionId);
     deps.hub.dispose(sessionId);
+    deps.fish?.forget(sessionId);
     await acp.closeSession(sessionId).catch(() => {});
     sendJson(res, ok({ closed: sessionId }));
   }
