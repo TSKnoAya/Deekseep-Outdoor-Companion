@@ -778,3 +778,37 @@ dsh-plugin/
 
 回滚：把 `~/.dsh/profiles/desktop/package.json` 换回
 `package.json.bak-*`（去掉 `mobile-gateway` 依赖与 bundle），重启应用即回到原状。
+
+### 16.6 第一版界面的两个问题（用户截图反馈）
+
+| 问题 | 原因 | 修法 |
+| --- | --- | --- |
+| provider / model 输入框**溢出卡片** | `width:100%` + `padding` 而没有 `box-sizing:border-box` | 给 `input` 样式加 `boxSizing:'border-box'`；文件路径那行加 `wordBreak:'break-all'` + `maxWidth:60%` |
+| **不知道该填什么**（只能靠猜字符串） | 第一版只有两个空输入框 | 新增 `GET /models`，从 DSH 的 `ctx.llm` 取真实清单，界面改成下拉 |
+
+`GET /models` 的实现要点：
+
+```js
+const llm = ctx.get('llm');            // 懒取，不用 inject（拿不到就退回手动输入）
+const providers = llm.listProviders(); // 已加载的适配器
+await llm.listModels(providerId);      // 各自的型号
+```
+
+- 某个 provider 查模型失败**只标记不抛**（第三方路由半死不活是常态），不能让整张清单崩；
+- 界面：有清单 → 两个 `<select>`（换 provider 时 model 自动落到它的第一个）；
+  没清单 / 用户点「手动填写」→ 退回文本框；
+- 依赖是懒取的：`ctx.get('llm')` 拿不到时只影响这一块，不会让整页挂掉。
+
+### 16.7 顺带验证到的（这次能验了）
+
+DSH 的 web 端口是**漂移的**（本次 5115，另外 8326/10290 属于别的服务）。
+按进程号查出监听端口后 curl：
+
+```
+curl http://127.0.0.1:5115/dsh-mobile-gateway/api/status
+→ {"ok":true,"running":true,"version":"0.1.0","listen":{"host":"0.0.0.0","port":8788},
+   "dsh":{"connected":true,"name":"deepseek-harness-acp"},"devices":2}
+```
+
+**这证明「设置页 → 插件 host → 网关 → 真实状态」整条代理链是通的**，
+不只是"页面能显示"。客户端 JS 的改动要重启 DSH 才加载。

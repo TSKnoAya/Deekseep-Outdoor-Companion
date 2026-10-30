@@ -123,6 +123,42 @@ export function apply(ctx) {
     return body;
   });
 
+  /**
+   * DSH 里*真正可用*的 provider / model 清单。
+   *
+   * 用 `ctx.llm`（DSH 的 LLM 注册表）：provider 是已加载的适配器，
+   * model 是各适配器自报的型号。这样设置页能给出下拉选项，用户不用猜字符串。
+   * 注意：某个 provider 查模型失败不能拖垮整张清单（第三方路由经常半死不活）。
+   */
+  route('GET', `${API}/models`, async () => {
+    const llm = ctx.get('llm');
+    if (!llm || typeof llm.listProviders !== 'function') {
+      throw fail('llm.unavailable', 'DSH 没有提供模型服务', {
+        hint: '检查 DSH 的 llm 插件是否加载；也可以在下面手动填写 provider / model。',
+      });
+    }
+    const providers = llm.listProviders() ?? [];
+    const groups = [];
+    for (const p of providers) {
+      const id = String(p?.id ?? p?.name ?? '');
+      if (!id) continue;
+      let models = [];
+      try {
+        models = (await llm.listModels(id)) ?? [];
+      } catch (e) {
+        // 记录但不抛出：让其它 provider 的模型照常显示
+        groups.push({ id, name: String(p?.name ?? id), models: [], error: e?.message ?? String(e) });
+        continue;
+      }
+      groups.push({
+        id,
+        name: String(p?.name ?? id),
+        models: models.map((m) => ({ id: String(m?.id ?? m?.name ?? ''), name: String(m?.name ?? m?.id ?? '') })).filter((m) => m.id),
+      });
+    }
+    return { providers: groups };
+  });
+
   route('PUT', `${API}/acp-model`, async (req) => {
     const payload = await readBody(req);
     requireThat(payload && payload.provider && payload.model, CODES.BAD_REQUEST, 'provider 和 model 都要填', {

@@ -52,6 +52,8 @@ window.__ModuleLoader__.load({
     });
     const input = {
       width: "100%",
+      // 没有这一行，padding 会加到 100% 之上 → 输入框超出卡片（第一次就是这样溢出的）
+      boxSizing: "border-box",
       padding: "7px 10px",
       borderRadius: "8px",
       border: "1px solid rgba(127,127,127,.35)",
@@ -73,6 +75,10 @@ window.__ModuleLoader__.load({
       const [model, setModel] = useState(null);
       const [provider, setProvider] = useState("");
       const [modelName, setModelName] = useState("");
+      // 可选清单来自 /models（DSH 的 llm 注册表）。空数组时退回手动输入。
+      const [catalog, setCatalog] = useState([]);
+      const [catalogErr, setCatalogErr] = useState("");
+      const [manual, setManual] = useState(false);
       const [pair, setPair] = useState(null);
       const [busy, setBusy] = useState("");
       const [note, setNote] = useState("");
@@ -94,6 +100,15 @@ window.__ModuleLoader__.load({
           setModel(m);
           setProvider((m.current && m.current.provider) || "");
           setModelName((m.current && m.current.model) || "");
+        }
+        // 可选清单：拿不到就退回手动输入（不阻塞上面两块）
+        const c = await api("/models");
+        if (c?.ok && Array.isArray(c.providers)) {
+          setCatalog(c.providers);
+          setCatalogErr(c.providers.length ? "" : "DSH 没有报告任何可用 provider");
+        } else {
+          setCatalog([]);
+          setCatalogErr(c?.hint || c?.error || "取不到可选模型清单");
         }
         setBusy("");
       }, []);
@@ -191,17 +206,49 @@ window.__ModuleLoader__.load({
             ? h("div", { style: { ...label, marginBottom: "10px" } },
                 "当前：", h("span", { style: mono }, `${model.current.provider} / ${model.current.model}`))
             : h("div", { style: { ...label, marginBottom: "10px" } }, "当前：未配置（ACP 会用 deepseek-official，多半会报 no API key）"),
-          h("div", { style: { display: "grid", gap: "10px" } },
-            h("div", null,
-              h("div", { style: label }, "provider"),
-              h("input", { style: input, value: provider, onChange: (e) => setProvider(e.target.value), placeholder: "our-free-model / deepseek-account / ..." })),
-            h("div", null,
-              h("div", { style: label }, "model"),
-              h("input", { style: input, value: modelName, onChange: (e) => setModelName(e.target.value), placeholder: "kilo-auto/free / deepseek-v4.1-flash / ..." }))),
+          (() => {
+            const useSelect = catalog.length > 0 && !manual;
+            const models = (catalog.find((p) => p.id === provider) || {}).models || [];
+            return h("div", { style: { display: "grid", gap: "10px" } },
+              h("div", null,
+                h("div", { style: label }, "provider"),
+                useSelect
+                  ? h("select", {
+                      style: input,
+                      value: provider,
+                      onChange: (e) => {
+                        const next = e.target.value;
+                        setProvider(next);
+                        // 换 provider 时把 model 落到它的第一个，避免留下不属于它的型号
+                        const first = (catalog.find((p) => p.id === next) || {}).models?.[0];
+                        setModelName(first ? first.id : "");
+                      },
+                    },
+                    catalog.map((p) => h("option", { key: p.id, value: p.id }, p.id)))
+                  : h("input", { style: input, value: provider, onChange: (e) => setProvider(e.target.value), placeholder: "our-free-model / deepseek-account / ..." })),
+              h("div", null,
+                h("div", { style: label }, "model"),
+                useSelect
+                  ? h("select", {
+                      style: input,
+                      value: modelName,
+                      onChange: (e) => setModelName(e.target.value),
+                    },
+                    models.length
+                      ? models.map((m) => h("option", { key: m.id, value: m.id }, m.id))
+                      : h("option", { value: "" }, "（这个 provider 没报模型）"))
+                  : h("input", { style: input, value: modelName, onChange: (e) => setModelName(e.target.value), placeholder: "kilo-auto/free / deepseek-v4.1-flash / ..." })),
+              h("div", { style: { display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap" } },
+                catalog.length
+                  ? h("button", { style: btn({ padding: "4px 10px", fontSize: "12px" }), onClick: () => setManual(!manual) },
+                      manual ? "改用下拉选择" : "手动填写")
+                  : null,
+                catalogErr ? h("span", { style: { ...label, marginBottom: 0 } }, catalogErr) : null));
+          })(),
           h("div", { style: { display: "flex", gap: "10px", marginTop: "12px", alignItems: "center" } },
             h("button", { style: btn(), onClick: saveModel, disabled: !running || busy === "save" || !provider || !modelName },
               busy === "save" ? "保存中…" : "保存并生效"),
-            model?.file ? h("span", { style: { ...label, marginBottom: 0, ...mono, fontSize: "11px" } }, model.file) : null)),
+            model?.file ? h("span", { style: { ...label, marginBottom: 0, ...mono, fontSize: "11px", wordBreak: "break-all", maxWidth: "60%" } }, model.file) : null)),
 
         note ? h("div", { style: { padding: "9px 12px", borderRadius: "8px", background: "rgba(63,185,80,.12)", fontSize: "12.5px" } }, note) : null,
         (err || statusErr) ? h("div", { style: { padding: "9px 12px", borderRadius: "8px", background: "rgba(248,81,73,.12)", fontSize: "12.5px", marginTop: "8px" } }, err || statusErr) : null,
