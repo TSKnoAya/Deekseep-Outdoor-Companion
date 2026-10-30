@@ -257,15 +257,17 @@ private fun PairingScreen(state: AppState, vm: ChatViewModel) {
             text = {
                 Column {
                     Text("1. 在电脑上打开命令行，进入 mobile-gateway 目录")
-                    Text("2. 运行：npm start（或 node src/main.js）")
-                    Text("3. 窗口会打印：")
+                    Text("2. 运行：node src/main.js --listen 0.0.0.0:8788")
+                    Text("   （必须带 --listen，否则只监听本机回环，手机连不上）")
+                    Text("3. 窗口会打印两样东西：")
                     Text(
-                        "   网关已启动：http://192.168.1.10:8788\n   配对码 123456（5 分钟内有效）",
+                        "   手机端「网关地址」填：\n   http://192.168.1.247:8788\n   配对码 717842（5 分钟内有效）",
                         fontFamily = FontFamily.Monospace,
                         fontSize = 12.sp,
                     )
                     Spacer(Modifier.height(8.dp))
-                    Text("注意：电脑和手机要在同一个 Wi-Fi。")
+                    Text("注意：电脑和手机要在同一个 Wi-Fi；Windows 防火墙首次要允许「专用网络」。")
+                    Text("配对码过期或换手机：加 --pair 重启，会打印新码。")
                 }
             },
             confirmButton = { TextButton(onClick = { showHelp = false }) { Text("知道了") } },
