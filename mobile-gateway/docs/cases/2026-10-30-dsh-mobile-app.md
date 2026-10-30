@@ -920,3 +920,76 @@ curl /admin/status
    本机回环调试必须 `curl --noproxy '*'`。
 2. **手机锁屏时 `screencap` 全黑**，`mCurrentFocus=NotificationShade` 就是锁屏。
    MIUI 又不许 `adb shell input tap`（INJECT_EVENTS），所以"解锁看皮肤"只能由用户做。
+
+### 17.7 真机反馈：气泡文字是黑的（01:37）
+
+截图里 DSH 的回复几乎看不清——深蓝底 + 黑字。
+
+**根因**：皮肤版把 `MainActivity` 的 `Surface` 换成了 `SkinBackdrop`。`Surface` 不只是铺底色，
+它还负责提供 `LocalContentColor`；去掉之后根组合的 `LocalContentColor` 退回 `Color.Black`。
+`Card` 的自定义 `containerColor` 又推不出对应的 `onXxx` 色（`contentColorFor` 返回 Unspecified），
+于是气泡文字继承了黑色。
+
+修法两处（都要，缺一不可）：
+- 根组合：`CompositionLocalProvider(LocalContentColor provides Skin.Ink)`；
+- 气泡：`CardDefaults.cardColors(containerColor = ..., contentColor = Skin.Ink)`。
+
+顺带把 `BubbleBot` 从 `0xCC102033` 提到 `0xE6162A42`，深色背景上对比更稳。
+
+> 教训：**换掉 `Surface` 等于同时换掉了文字默认色**。以后凡是"透明化根容器"的改动，
+> 都要显式给出 `LocalContentColor`，否则整个界面会退成黑字。
+
+### 17.8 开源署名（准备挂 GitHub，不收费）
+
+新增 `THIRD_PARTY_NOTICES.md`：上游仓库、用到的四个文件、CC BY-NC-SA 4.0 的边界、
+以及"想彻底摆脱限制就替换这四个图或关掉 `Skin.ENABLED`"的两条路径。
+设置弹窗底部也加了一行署名 —— 许可要求**署名在分发物内可见**，只写在仓库里不够。
+
+---
+
+## 18. 2026-10-31 01:46–01:55 会话列表：让「＋」不再是单向门
+
+用户问「右上角的 + 是干什么的」，一查发现是个体验坑：`＋` 只是新建会话，
+但 App **没有任何地方能看历史会话**，点完就再也回不去（对话还在 DSH 里，只是手机上找不到）。
+
+### 18.1 网关：给 `/v1/sessions` 补标题与时间
+
+ACP 的 `session/list` 只给 `{ sessionId, cwd }`，手机上就是一串 uuid。新增 `src/session-meta.js`：
+
+| 步骤 | 说明 |
+| --- | --- |
+| 定位文件 | 扫 `~/.dsh/sessions/*/`，两种目录命名都认：桌面端 `session-<id>/`、**ACP 端 `<id>/`** |
+| 读元数据 | `session.v4.jsonl.zstd` 的 mtime = 最后活动时间；首条 `user/message` = 标题 |
+| 缓存 | 按「路径 + mtime + size」，没改过的会话不重复解压 |
+| 兜底 | 超过 16MB 不解压、单帧坏了跳过 → 只丢标题，不影响列表 |
+
+### 18.2 三个必须踩过才知道的坑
+
+1. **zstd 是多帧的**。DSH 追加写：每批一个 frame。`zlib.zstdDecompressSync` **只解第一帧**
+   （实测整段只回来 237 个字符），必须按魔数 `28 B5 2F FD` 切开逐帧解再拼。
+2. **标题被我们自己的前言污染**。手机会话第一条 `user/message` 是人格卡+记忆卡，
+   DSH 拿它自动生成 `session/title` → 标题变成「【你是下面这个角色，请一直」。
+   解法：`cleanUserText()` 先按 `\n\n---\n\n` 取用户原话；`【…】`/`<system-reminder>`/
+   `Current …` 开头的一律判为"不是人说的话"，丢弃后回落到用户消息。
+3. **`textOf` 里的 `slice(0,400)`**：前言动辄 700+ 字，分隔符被截掉，标题永远是前言。
+   已去掉截断（文件大小本来就有上限）。
+
+额外一条：记忆卡是 CRLF 存的，拼出来的分隔符会变成 `\r\n\r\n---\r\n\r\n`，
+`cleanUserText` 必须先归一换行。
+
+### 18.3 App：标题可点 → 会话列表
+
+- 顶栏标题加 `▾`，点开 `DropdownMenu`：`＋ 新对话` + 最近 15 个会话；
+- 每项显示「标题 · 多久之前」，当前那个标「当前」；点了就 `openSession()`；
+- 新增 `vm.refreshSessions()`（只拉列表，不切会话、不重连 SSE）。
+
+### 18.4 实测输出
+
+```
+10-31 01:44 | 现在是这个app的测试对话       | c43fead8
+10-31 01:35 | 哪条鱼？                      | eecf521a
+10-31 01:11 | 你还记得我们昨天在群里聊过…   | deac4bf6
+```
+
+单测 159/159（session-meta 16 条，含多帧/污染/长前言三条回归）。
+**UI 未在真机确认**：手机锁屏，`screencap` 全黑。

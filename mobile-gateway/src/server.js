@@ -275,7 +275,10 @@ export function createGatewayServer(deps) {
   async function handleListSessions(req, res) {
     const acp = requireAcp();
     const sessions = await acp.listSessions();
-    sendJson(res, ok({ sessions }));
+    // 补标题与最后活动时间，并按时间倒序：手机上的列表才认得出来
+    const enriched = deps.sessionMeta ? deps.sessionMeta.enrich(sessions) : sessions;
+    enriched.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+    sendJson(res, ok({ sessions: enriched }));
   }
 
   async function handleCreateSession(req, res) {

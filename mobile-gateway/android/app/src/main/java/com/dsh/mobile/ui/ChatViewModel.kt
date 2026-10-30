@@ -301,6 +301,24 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * 只刷新会话列表（给顶栏的下拉用）。
+     *
+     * 单独一个方法而不是复用 loadSessionsAndConnect：那个会切会话、重连 SSE，
+     * 用户只是想看看"还有哪些对话"时不该动当前会话。
+     */
+    fun refreshSessions() {
+        val c = client ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val list = c.listSessions()
+                _state.update { it.copy(sessions = list) }
+            } catch (_: Exception) {
+                // 列表拉不到不影响聊天，安静失败
+            }
+        }
+    }
+
     fun openSession(sessionId: String) {
         sse?.cancel()
         store.lastSessionId = sessionId

@@ -4,6 +4,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
@@ -150,7 +151,12 @@ class GatewayClient(
         return arr.mapNotNull { el ->
             val o = el as? JsonObject ?: return@mapNotNull null
             val sid = o["sessionId"]?.jsonPrimitive?.content ?: return@mapNotNull null
-            SessionInfo(sessionId = sid, cwd = o["cwd"]?.jsonPrimitive?.content ?: "")
+            SessionInfo(
+                sessionId = sid,
+                cwd = o["cwd"]?.jsonPrimitive?.content ?: "",
+                title = o["title"]?.jsonPrimitive?.contentOrNull,
+                updatedAt = o["updatedAt"]?.jsonPrimitive?.contentOrNull?.toLongOrNull(),
+            )
         }
     }
 
@@ -244,7 +250,14 @@ data class PairResult(val deviceId: String, val token: String)
 
 data class HealthInfo(val version: String, val dshConnected: Boolean, val dshName: String?)
 
-data class SessionInfo(val sessionId: String, val cwd: String)
+data class SessionInfo(
+    val sessionId: String,
+    val cwd: String = "",
+    /** 网关从 DSH 会话文件里读出来的首句；读不到就是 null（老会话/空会话） */
+    val title: String? = null,
+    /** 最后活动时间（毫秒）；读不到就是 null */
+    val updatedAt: Long? = null,
+)
 
 data class SendResult(val turnId: String, val queued: Int)
 

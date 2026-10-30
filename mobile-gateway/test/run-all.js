@@ -31,6 +31,7 @@ const FILES = [
   'fish-inject.test.js',
   'paths.test.js',
   'server.test.js',
+  'session-meta.test.js',
 ];
 
 const args = process.argv.slice(2);

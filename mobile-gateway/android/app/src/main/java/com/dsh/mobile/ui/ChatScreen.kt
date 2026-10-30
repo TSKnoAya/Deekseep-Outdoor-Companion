@@ -1,6 +1,7 @@
 package com.dsh.mobile.ui
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -27,6 +28,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
@@ -64,6 +66,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.sp
@@ -73,6 +76,7 @@ import com.dsh.mobile.R
 @Composable
 fun ChatScreen(state: AppState, vm: ChatViewModel) {
     var showSettings by remember { mutableStateOf(false) }
+    var showSessions by remember { mutableStateOf(false) }
 
     if (!state.paired) {
         PairingScreen(state, vm)
@@ -96,29 +100,93 @@ fun ChatScreen(state: AppState, vm: ChatViewModel) {
                     titleContentColor = MaterialTheme.colorScheme.onSurface,
                 ),
                 title = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (Skin.ENABLED) {
-                            Image(
-                                painter = painterResource(R.drawable.skin_emblem),
-                                contentDescription = null,
-                                modifier = Modifier.height(28.dp).width(20.dp),
+                    // 标题可点：弹出会话列表，能切回之前的对话。
+                    // 之前只有右上角的「＋」，一点就新开会话、旧对话在手机上再也找不回来。
+                    Box {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.clickable {
+                                showSessions = true
+                                vm.refreshSessions()
+                            }.padding(end = 8.dp),
+                        ) {
+                            if (Skin.ENABLED) {
+                                Image(
+                                    painter = painterResource(R.drawable.skin_emblem),
+                                    contentDescription = null,
+                                    modifier = Modifier.height(28.dp).width(20.dp),
+                                )
+                                Spacer(Modifier.width(8.dp))
+                            }
+                            Column {
+                                Text(
+                                    if (Skin.ENABLED) "深海工坊" else "DSH",
+                                    style = MaterialTheme.typography.titleMedium,
+                                )
+                                Text(
+                                    subtitle(state),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = when {
+                                        state.streamLostReason != null -> MaterialTheme.colorScheme.error
+                                        state.dshConnected -> MaterialTheme.colorScheme.onSurfaceVariant
+                                        else -> MaterialTheme.colorScheme.error
+                                    },
+                                )
+                            }
+                            Icon(
+                                Icons.Default.ArrowDropDown,
+                                contentDescription = "切换会话",
+                                modifier = Modifier.size(20.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
-                            Spacer(Modifier.width(8.dp))
                         }
-                        Column {
-                            Text(
-                                if (Skin.ENABLED) "深海工坊" else "DSH",
-                                style = MaterialTheme.typography.titleMedium,
-                            )
-                            Text(
-                                subtitle(state),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = when {
-                                    state.streamLostReason != null -> MaterialTheme.colorScheme.error
-                                    state.dshConnected -> MaterialTheme.colorScheme.onSurfaceVariant
-                                    else -> MaterialTheme.colorScheme.error
+
+                        DropdownMenu(expanded = showSessions, onDismissRequest = { showSessions = false }) {
+                            DropdownMenuItem(
+                                text = { Text("＋ 新对话") },
+                                onClick = {
+                                    showSessions = false
+                                    vm.createSession()
                                 },
                             )
+                            HorizontalDivider()
+                            if (state.sessions.isEmpty()) {
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            "还没有历史会话",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    },
+                                    onClick = { showSessions = false },
+                                )
+                            }
+                            state.sessions.take(15).forEach { s ->
+                                val current = s.sessionId == state.currentSessionId
+                                DropdownMenuItem(
+                                    text = {
+                                        Column {
+                                            Text(
+                                                s.title ?: "（空会话）",
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                                color = if (current) MaterialTheme.colorScheme.primary else Color.Unspecified,
+                                            )
+                                            Text(
+                                                if (current) "${relativeTime(s.updatedAt)} · 当前" else relativeTime(s.updatedAt),
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            )
+                                        }
+                                    },
+                                    onClick = {
+                                        showSessions = false
+                                        if (!current) vm.openSession(s.sessionId)
+                                    },
+                                )
+                            }
                         }
                     }
                 },
@@ -189,6 +257,21 @@ fun ChatScreen(state: AppState, vm: ChatViewModel) {
 
     if (showSettings) {
         SettingsDialog(state, vm, onClose = { showSettings = false })
+    }
+}
+
+
+/** 会话列表里的时间：刚刚 / N 分钟前 / 今天 HH:mm / 更早给日期。 */
+private fun relativeTime(ms: Long?): String {
+    if (ms == null) return "时间未知"
+    val diff = System.currentTimeMillis() - ms
+    return when {
+        diff < 60_000 -> "刚刚"
+        diff < 3_600_000 -> "${diff / 60_000} 分钟前"
+        else -> {
+            val pattern = if (diff < 24 * 3_600_000) "HH:mm" else "MM-dd HH:mm"
+            java.text.SimpleDateFormat(pattern, java.util.Locale.getDefault()).format(java.util.Date(ms))
+        }
     }
 }
 
