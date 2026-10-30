@@ -46,10 +46,20 @@ rem -- firewall ------------------------------------------------
 rem Inbound 8788 must be allowed or the phone can never connect.
 rem Windows blocks inbound by default; adding a rule needs admin,
 rem so this raises one UAC prompt (only the first time).
+rem
+rem IMPORTANT: the rule must cover ALL profiles. Windows often classifies
+rem Ethernet as "Public", and a rule that only allows "Private" still DROPS
+rem the packets there -> the phone waits 10s and reports a timeout (observed).
+set "FW_EXISTS="
 netsh advfirewall firewall show rule name="DSH-Mobile-Gateway-8788" >nul 2>nul
-if errorlevel 1 (
+if not errorlevel 1 set "FW_EXISTS=1"
+
+if defined FW_EXISTS (
+  rem Best effort, no UAC: widen an existing rule to every profile.
+  netsh advfirewall firewall set rule name="DSH-Mobile-Gateway-8788" new profile=any enable=yes >nul 2>nul
+) else (
   echo Allow inbound TCP 8788 in Windows Firewall ^(one UAC prompt, first run only^)...
-  powershell -NoProfile -Command "Start-Process -FilePath netsh -ArgumentList 'advfirewall','firewall','add','rule','name=DSH-Mobile-Gateway-8788','dir=in','action=allow','protocol=TCP','localport=8788','profile=private' -Verb RunAs -WindowStyle Hidden" >nul 2>nul
+  powershell -NoProfile -Command "Start-Process -FilePath netsh -ArgumentList 'advfirewall','firewall','add','rule','name=DSH-Mobile-Gateway-8788','dir=in','action=allow','protocol=TCP','localport=8788','profile=any' -Verb RunAs -WindowStyle Hidden" >nul 2>nul
   ping -n 4 127.0.0.1 >nul
   netsh advfirewall firewall show rule name="DSH-Mobile-Gateway-8788" >nul 2>nul
   if errorlevel 1 (

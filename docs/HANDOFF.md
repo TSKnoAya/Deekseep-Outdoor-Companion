@@ -5,6 +5,53 @@
 
 ---
 
+## 快照：2026-10-30 23:02–23:10（真机通了：防火墙只放行「专用网络」）
+
+### 用户要求
+
+> 「点了测试连接后，这样的提示。我手机现在插上了 USB 连接电脑，你可以调用吗？」
+
+### 结论
+
+新 APK 的报错终于说人话了：`failed to connect to /192.168.1.247 (port 8788) …
+**after 10000ms**`。**超时 = 包被静默丢弃**（防火墙 DROP），不是「网关没开」
+（那会是 connection refused，秒回）。
+
+查到两个事实：
+- `Get-NetConnectionProfile` → 以太网 `NetworkCategory = **Public**`
+- `Get-NetFirewallRule DSH-Mobile-Gateway-8788` → `Profile = **Private**`
+
+→ Public 配置下入站照样被丢。改成 `profile=any`（UAC 提权，exitcode=0）后**通了**。
+
+### 真机验证（adb + 手机自带 curl，绕开 App 界面）
+
+```
+adb shell curl .../v1/pair            → {"ok":true,"deviceId":"dev-a1bfe561491c","token":"…"}
+adb shell curl .../v1/sessions        → sessionId=28dd210f-…
+adb shell curl .../messages           → {"ok":true,"turnId":"turn-…"}
+adb shell curl -N .../stream          → hello → text:"收到" → turn_end ok:true, 2624ms
+```
+
+**第一次在真机上把「配对 → 建会话 → 发消息 → 流式回包」全走通。**
+网关/防火墙/DSH/模型四段都证明没问题，只剩 App 界面这层。
+
+### 改了什么
+
+| 改动 | 落点 |
+| --- | --- |
+| 防火墙规则改为 `profile=any`（活的规则已用 netsh set 改过） | 系统防火墙 |
+| 启动脚本建规则用 `profile=any`；规则已存在时也尝试放宽 | `start-gateway.bat` |
+| 文档 | case §14（含「超时 vs 拒绝」判据、adb 验证命令） |
+
+### 交接 / 注意
+
+- 测试设备 `adb-verify`（`dev-a1bfe561491c`）留在 `devices.json`；无吊销接口，
+  要清就停网关后删该文件。
+- 配对码一次性 + 5 分钟；过期只能重启网关（`--pair`）重新打。
+- 当前网关是我在会话里起的后台进程，**可能随时停**——用户自己双击 bat 才是长久方案。
+
+---
+
 ## 快照：2026-10-30 22:48–23:00（`配对失败：null` = App 网络全在主线程，**必须重装 APK**）
 
 ### 用户要求

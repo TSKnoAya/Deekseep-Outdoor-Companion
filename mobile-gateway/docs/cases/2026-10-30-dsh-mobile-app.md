@@ -554,3 +554,67 @@ DSH 自带 `--dump-config`，能把「bundle + profile patch + 根 patch」合�
 **必须装新 APK**：旧的那版不可能配对成功，不是操作问题。
 装好后先点「测试连接」——出现绿色的「连上了：网关 v0.1.0 / DSH 已连接」，
 再填窗口里刚打印的 6 位码（5 分钟内点配对）。
+
+---
+
+## 14. 2026-10-30 23:02–23:10 真机通了：防火墙只放行了「专用网络」
+
+装上新 APK 后点「测试连接」，报错变成人话了：
+
+```
+连不上网关（failed to connect to /192.168.1.247 (port 8788)
+from /192.168.1.10 (port 40666) after 10000ms）
+```
+
+### 14.1 关键判据：`after 10000ms` = 超时，不是被拒绝
+
+| 现象 | 含义 |
+| --- | --- |
+| `connection refused`（很快返回） | 端口没进程在听 → 网关没启动 |
+| **`after 10000ms` / 超时** | 包被**静默丢弃** → 通常是防火墙 DROP，不是网关没开 |
+
+### 14.2 真凶：网络类别是 Public，规则只放行 Private
+
+```
+Get-NetConnectionProfile → Name="网络 2" InterfaceAlias=以太网 NetworkCategory=Public
+Get-NetFirewallRule DSH-Mobile-Gateway-8788 → Profile = Private
+```
+
+Windows 把这块以太网判成了「公用网络」（很常见），而之前脚本建规则时用的是
+`profile=private` → 入站在 Public 配置下仍然被丢。手机同网段（192.168.1.10 → .247），
+所以不是路由/Wi-Fi 问题。
+
+修法：`netsh advfirewall firewall set rule name="DSH-Mobile-Gateway-8788" new profile=any enable=yes`
+（需管理员，实测 exitcode=0）。启动脚本也改成建规则时就用 `profile=any`，
+并在规则已存在时尝试放宽到 any。
+
+### 14.3 用手机真机跑完整链（adb，绕开 App 界面）
+
+手机插 USB、`adb devices` 授权后，用手机自带的 curl 直接打网关：
+
+```bash
+adb shell "curl -s -m 10 -X POST -H 'content-type: application/json' \
+  -d '{\"code\":\"913789\",\"deviceName\":\"adb-verify\"}' http://192.168.1.247:8788/v1/pair"
+# → {"ok":true,"deviceId":"dev-a1bfe561491c","token":"..."}
+
+adb shell "curl -s -X POST -H 'authorization: Bearer <token>' -d '{}' .../v1/sessions"
+# → sessionId=28dd210f-…
+
+adb shell "curl -s -X POST -H 'authorization: Bearer <token>' \
+  -d '{\"text\":\"只回复两个字：收到\"}' .../v1/sessions/<sid>/messages"
+
+adb shell "curl -s -N -m 12 -H 'authorization: Bearer <token>' .../v1/sessions/<sid>/stream"
+# → data: {"type":"hello",...}
+# → data: {"type":"text","text":"收到"}
+# → data: {"type":"turn_end","ok":true,"result":{"text":"收到"},"durationMs":2624}
+```
+
+**这是第一次在真机上把「配对 → 建会话 → 发消息 → 流式回包」全部走通**（2624ms）。
+证明网关、防火墙、DSH、模型路由四段都没问题——剩下的只是 App 界面这一层。
+
+### 14.4 注意（交接）
+
+- 测试用的设备 `adb-verify`（`dev-a1bfe561491c`）留在 `devices.json` 里；没有吊销接口，
+  想清掉就停网关后删 `~/.dsh/mobile-gateway/devices.json`。
+- 配对码是一次性的：我给 App 另发了一个 `POST /v1/devices` 新码（需令牌），
+  但**5 分钟有效**，过期只能重启网关重新打。
