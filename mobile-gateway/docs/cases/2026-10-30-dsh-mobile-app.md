@@ -162,7 +162,7 @@ node test/run-all.js --grep 失败
 | 网关 85 条单测 | ✅ 85/85（连跑 3 次均 85/85、0 cancelled，见 §8） |
 | ACP 握手 / 建会话 / 跨进程 list | ✅ 实测通过（前序会话） |
 | `sherpa-onnx.node` 可 require | ✅ 实测 |
-| **ACP `agent_message_chunk` 运行期样本** | ❌ **未验证**（沙箱曾禁 spawn） |
+| **ACP `agent_message_chunk` 运行期样本** | ⚠️ **半通**：`node test/e2e-smoke.mjs` 已跑出 `hello → turn_start → turn_end` 真实回合，但 LLM 调用被 DSH 拦下（`llm-deepseek: no API key for provider route "deepseek-official"`），**文本块 0 个**，见 §9 |
 | **SenseVoice 实际转写延迟** | ❌ 未验证（模型未下载） |
 | **火山引擎 TTS 真实调用** | ❌ 未实现（用户要求跳过） |
 | **APK 构建** | ✅ `assembleDebug` BUILD SUCCESSFUL（47s）；产物 `android/app/build/outputs/apk/debug/app-debug.apk`，17,436,189 字节，另存副本 `mobile-gateway/app-debug-0.1.0.apk`。`aapt2 dump badging`：`com.dsh.mobile` v0.1.0 / minSdk 26 / targetSdk 35 |
@@ -174,10 +174,34 @@ node test/run-all.js --grep 失败
 
 > 本次**没有版本号变更**（`package.json` 仍是 `0.1.0`，子工程不入根 `package.json` 依赖链），
 > 因此不进 `docs/RELEASE-QUEUE.md` 的发布批次；交接信息记在 `docs/HANDOFF.md` 顶部快照
-> 「2026-10-30 20:30–20:40（手机端 App 搬进仓库 + APK 构建通过）」。
->
-> 上真机前必须做的三件事：① 另开一个终端 `cd mobile-gateway && node src/main.js` 起网关；
-> ② 电脑端生成配对码，App 里输入；③ 手机与电脑在同一局域网，且防火墙放行网关端口。
+> 「2026-10-30 20:30–20:40」与「2026-10-30 21:00–21:20」。
+
+### 上真机的完整步骤（含地址与配对码从哪来）
+
+网关**默认只监听 `127.0.0.1:8788`**（回环）。回环地址对手机来说指的是手机自己，
+所以不换监听地址就永远连不上。正确姿势：
+
+```bash
+cd surfcore/mobile-gateway
+node src/main.js --listen 0.0.0.0:8788
+```
+
+窗口里会打印三样东西（就是你要找的答案）：
+
+```
+[21:07:46] 网关已启动：http://0.0.0.0:8788
+[21:07:46]    手机端「网关地址」填下面这个：
+[21:07:46]    http://192.168.1.247:8788        ← 填进 App「网关地址」
+[21:07:46]   首次使用：配对码 717842（5 分钟内有效）  ← 填进 App「6 位配对码」
+```
+
+1. App 里「网关地址」填 **http://电脑局域网IP:8788**（App 会自动补 `http://`）。
+2. 「6 位配对码」填窗口里那 6 位数字（5 分钟有效）。
+3. 手机与电脑同一 Wi-Fi；Windows 防火墙首次会弹窗，要允许**专用网络**。
+4. 配对码过期 / 换手机 / 重装 App：`node src/main.js --listen 0.0.0.0:8788 --pair`
+   （**已配对过设备后，启动默认不再打码**——否则任何人重启一下就能拿到码，是个漏洞）。
+
+> 端口被占用时换一个：`--listen 0.0.0.0:8790`，App 里地址同步改端口。
 
 ---
 
@@ -220,3 +244,78 @@ node test/run-all.js --grep 失败
 3. **手机录音上传**（`gateway-sherpa`）：需 AudioRecord 采 16kHz 单声道 PCM16 + 手写 44 字节 WAV 头。
 4. **火山 TTS**：用户明确「先跳过」，只留接口与 `tts.provider-not-configured` 的诚实报错。
 
+
+---
+
+## 9. 2026-10-30 21:00–21:20 端到端冒烟（补掉「运行期样本」这个洞）
+
+用户问「网关地址和配对码在哪看」，一查发现两个**会让这一步直接卡死**的问题，都已修：
+
+### 9.1 `--listen` 是个假开关
+
+`main.js` 的端口占用提示写着「换一个：`--listen 127.0.0.1:8790`」，但**代码从没解析过 argv**。
+照提示敲只会得到 `node: bad option`。而网关默认 `127.0.0.1:8788`，手机永远连不上——
+用户按文档操作会得到「App 一直转圈」，且没有任何提示告诉他为什么。
+
+修法（`src/cli.js` 新增，`test/cli.test.js` 14 条钉住）：
+- `--listen host:port` / `--listen=host:port` 真的生效（覆盖 `resolveConfig`）；
+- 非法地址直接打用法并 `exit 1`，不静默落到默认值；
+- 回环监听时打印「手机连不上 + 该怎么改」；非回环监听时**自动探测本机 IPv4 并打印可填地址**
+  （过滤 `127.*` 与 `169.254.*`，后者是 DHCP 没拿到地址，写出来只会误导）。
+
+### 9.2 配对过一台设备后，再也拿不到新码
+
+首次启动会打码（`devices.json` 为空时）；可 `/v1/devices` 要令牌，于是：
+**一旦配对过一台，换手机/重装 App 就无路可走**，只能删 `devices.json`（文档里没写，等于死路）。
+
+修法：新增 `--pair`，强制生成并打印新码。同时把「已配对就不打码」写进逻辑——
+不能无条件打，否则任何人重启一下网关就等于拿到配对码，那是个洞。
+
+### 9.3 端到端冒烟脚本 `test/e2e-smoke.mjs`
+
+不进 `test/run-all.js`（需要真 DSH、会花 token），手动跑：
+
+```bash
+node test/e2e-smoke.mjs          # 默认 8791 端口
+```
+
+它把整条链真跑一遍：起网关（子进程）→ 抠配对码 → `/v1/pair` → `/v1/sessions` →
+连 SSE → `/messages` → 等 `turn_end` → 打印收到的事件类型与文本块。
+
+### 9.4 冒烟结果（重要，且没好听的）
+
+```
+[e2e] 拿到配对码 362249
+[e2e] 配对成功
+[e2e] DSH 已连接
+[e2e] 建会话 591930df-e3dc-47c6-9afd-09c141651383
+[e2e] 已提交 turn turn-1793365894181-x6hiwj
+[e2e] 收到事件类型： hello, turn_start, turn_end
+[e2e] 文本块数量： 0
+[e2e] turn_end： ok:false, failure.code=acp.turn-failed,
+      error="DSH 返回错误：Internal error: turn failed: llm-deepseek:
+             no API key for provider route \"deepseek-official\";
+             store DEEPSEEK_API_KEY through the credentials service"
+```
+
+**结论分两半，不能混着说：**
+
+| 环节 | 结果 |
+| --- | --- |
+| 网关 HTTP（配对/鉴权/建会话/SSE 订阅/提交） | ✅ 全通 |
+| 网关 ↔ DSH 的 ACP 握手与回合生命周期 | ✅ `turn_start` / `turn_end` 真跑出来了，**失败也是结构化回传**（不是静默转圈） |
+| DSH 内部调 LLM | ❌ 缺 `deepseek-official` 这条 provider route 的密钥 |
+
+第三条**不是网关的 bug**：网关拉起的 ACP 子进程是全新的 DSH 实例，它只能看到
+`~/.dsh/.credentials.yaml` 里的 `deepseek-account-platform/default` 这类 grant，
+看不到桌面端登录态的模型路由。桌面端 UI 能用，是因为它走 Web 层 + 已登录凭据。
+
+**三条可选出路**（要用户拍板，别自己猜）：
+1. 给网关进程注入 `DEEPSEEK_API_KEY`（platform.deepseek.com 申请）——最直接；
+2. 在 DSH 桌面端「模型」页把 `deepseek-official` 这条路由配上密钥（走 credentials service）；
+3. 放弃 ACP，让网关照 surfcore 现在的做法连 Web 层（`discoverDshBaseUrl()` + 离线铸 Cookie）。
+   **代价**：DESIGN §1 否决 Web 的三条理由（只监听回环 / Cookie 绑 authority / WebSocket RPC）
+   会全部复活，只是「同一台机器上」能绕过；跨机器不行。
+
+> 在第三条路走通之前，**手机上发消息会看到一条明确的错误**（`acp.turn-failed` + 上面那句英文），
+> 不会假装成功。这是有意的：宁可报错，也不要让用户以为「发了但 DSH 不理我」。

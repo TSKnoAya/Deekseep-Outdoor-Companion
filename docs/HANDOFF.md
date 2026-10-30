@@ -5,6 +5,57 @@
 
 ---
 
+## 快照：2026-10-30 21:00–21:20（网关地址/配对码入口 + `--listen`/`--pair` + 端到端冒烟）
+
+### 用户要求
+
+> 「我需要在哪里查看网关地址和 6 位配对码？」
+
+一句话的问题，查下去发现**照文档做必然卡死**：网关默认只监听回环，而唯一的换址开关
+`--listen` 在报错文案里出现过、代码里根本没实现。
+
+### 改了什么
+
+| 改动 | 落点 |
+| --- | --- |
+| 新增启动参数解析（`--listen` / `--listen=` / `--pair` / `-h`） | 新增 `src/cli.js`；`src/main.js` 改为先解析 argv 再 `resolveConfig` |
+| 启动横幅改成能照抄的形式 | 回环时打「手机连不上 + 怎么改」；非回环时**探测本机 IPv4 并打印可填地址**（滤掉 `127.*`、`169.254.*`） |
+| 补 `--pair`（配对码重发入口） | 已配对设备后启动不再自动打码；换手机/重装 App 用 `--pair` |
+| 新增端到端冒烟脚本 | `test/e2e-smoke.mjs`（起网关子进程 → 配对 → 建会话 → SSE → 发消息 → 等 `turn_end`） |
+| 新增 14 条 CLI 测试 | `test/cli.test.js`，已进 `test/run-all.js` → **99/99** |
+| 文档 | `docs/FOLDER_MAP.md` 更新启动命令；case 文档 §7 重写为「上真机完整步骤」、新增 §9 冒烟记录 |
+
+### 已验证
+
+- `node test/run-all.js` → **tests 99 / pass 99 / fail 0 / cancelled 0**。
+- `node src/main.js --help` / `--listen abc` → 帮助与报错都正常（非法地址 `exit 1`，不静默用默认值）。
+- `node src/main.js --listen 0.0.0.0:8788` 实测输出：
+  `网关已启动：http://0.0.0.0:8788` / `手机端「网关地址」填：http://192.168.1.247:8788` / `配对码 717842`；
+  2 秒后 `DSH 已连接：deepseek-harness-acp v0.0.1`（会话能力 close,list,resume）。
+- `node test/e2e-smoke.mjs` → HTTP 全通、ACP 回合生命周期 `hello → turn_start → turn_end` 真跑出来；
+  **但文本块 0 个**，`turn_end.ok=false`，原因是 DSH 缺 provider route 密钥（见下）。
+
+### 没验证 / 阻塞（**这条是真阻塞，别当成小问题**）
+
+- **DSH 的 `deepseek-official` 路由没有 API key**：
+  `llm-deepseek: no API key for provider route "deepseek-official"; store DEEPSEEK_API_KEY through the credentials service`。
+  网关拉起的 ACP 子进程是全新 DSH 实例，只能看到 `~/.dsh/.credentials.yaml` 里的
+  `deepseek-account-platform/default` 这类 grant，看不到桌面端登录态的模型路由 →
+  **手机上发消息会明确报错**（不是静默失败）。
+  三条出路：① 给网关注入 `DEEPSEEK_API_KEY`；② 桌面端「模型」页配该路由；③ 改走 Web 层（复活 DESIGN 否决的三条风险）。
+  详见 `mobile-gateway/docs/cases/2026-10-30-dsh-mobile-app.md` §9.4。**需要用户拍板，别自己选。**
+- 真机（红米 K80）仍未装过一次；防火墙放行、同 Wi-Fi 未验。
+- `agent_message_chunk` 的**真实文本**样本仍然没有（被上面的密钥问题挡在门外）。
+
+### 安全提醒
+
+- 排查凭据时用 `sed` 想脱敏，但对 `refs:` 里的多行 JSON 字符串无效，**真实 token 已被打印进会话记录**
+  （QODERCN / ZCODE / MINIMAX / WORKBUDDY / BUDDY 等账号）。建议按需轮换，至少别再往外贴会话日志。
+- 测试期间在 `~/.dsh/mobile-gateway/devices.json` 生成过一台 `e2e-smoke` 设备，已删除；
+  现在该目录只剩自动生成的配置，首次启动会正常打配对码。
+
+---
+
 ## 快照：2026-10-30 20:30–20:40（手机端 App 搬进仓库 + APK 构建通过）
 
 ### 用户要求

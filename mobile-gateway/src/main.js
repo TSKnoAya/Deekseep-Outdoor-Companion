@@ -18,6 +18,7 @@ import { createDeviceAsr } from './voice/asr-device.js';
 import { createVolcengineTts } from './voice/tts-volcengine.js';
 import { createGatewayServer } from './server.js';
 import { createSettingsStore, resolveConfig, parseListen } from './config.js';
+import { parseArgs, usage, isLoopbackHost, lanAddresses } from './cli.js';
 import { CODES, fail } from './errors.js';
 
 const stamp = () => new Date().toISOString().slice(11, 19);
@@ -26,7 +27,24 @@ const log = (msg, data) => {
   console.log(`[${stamp()}] ${msg}${tail}`);
 };
 
-const config = resolveConfig();
+// `--listen` 必须先解析：早期版本的报错文案提到了这个开关，但代码没实现，
+// 照抄只会得到 `node: bad option`。现在文案与能力一致。
+const args = parseArgs(process.argv.slice(2));
+if (args.help) {
+  console.log(usage());
+  process.exit(0);
+}
+if (args.listen !== null) {
+  try {
+    parseListen(args.listen);
+  } catch (e) {
+    console.error(`监听地址不合法：${e.message}\n`);
+    console.error(usage());
+    process.exit(1);
+  }
+}
+
+const config = resolveConfig(args.listen !== null ? { listen: args.listen } : {});
 const settings = createSettingsStore({ file: config.settingsFile, log });
 const devices = new DeviceStore({ file: config.devicesFile, log });
 
@@ -146,15 +164,43 @@ server.listen(port, host, () => {
   const shown = host.includes(':') ? `[${host}]` : host;
   log(`网关已启动：http://${shown}:${port}`);
   log(`状态目录：${config.stateDir}`);
-  if (host !== '127.0.0.1' && host !== 'localhost' && host !== '::1') {
+
+  if (isLoopbackHost(host)) {
+    // 用户最容易踩的坑：在电脑浏览器里打开 127.0.0.1 一切正常，
+    // 手机却永远连不上——回环地址对手机来说指的是手机自己。
+    log('⚠️  当前只监听回环地址，手机连不上（127.0.0.1 对手机来说是手机自己）');
+    log(`   要让手机连：node src/main.js --listen 0.0.0.0:${port}`);
+  } else {
     log('⚠️  正在监听非回环地址：手机可以连进来，请确认已生成配对码、且只在可信网络里使用');
+    const lan = lanAddresses();
+    if (lan.length > 0) {
+      log('   手机端「网关地址」填下面这个：');
+      for (const ip of lan) log(`   http://${ip}:${port}`);
+    } else {
+      log('   没检测到局域网 IPv4 地址：先连上 Wi-Fi/网线，或用本机网卡 IP 手动拼地址');
+    }
   }
-  // 没有任何设备时，直接生成一个配对码打出来，省得用户找不到入口
-  if (devices.list().length === 0) {
+
+  // 没有人配对过时自动打一个码；配对过之后只认显式的 --pair。
+  // 不能无条件打：否则任何人能重启网关，就等于能拿到配对码。
+  const hasDevices = devices.list().length > 0;
+  if (args.pair || !hasDevices) {
     const issued = devices.issuePairCode();
     log('');
-    log(`  首次使用：配对码 ${issued.code}（5 分钟内有效）`);
-    log('  在手机 App 里输入这个码即可配对。');
+    if (args.pair) {
+      log(`  配对码 ${issued.code}（5 分钟内有效，已用 --pair 强制重新生成）`);
+    } else {
+      log(`  首次使用：配对码 ${issued.code}（5 分钟内有效）`);
+    }
+    log('  在手机 App 里输入这个码即可配对；过期了就 Ctrl+C 后重新启动网关。');
+    if (hasDevices) {
+      log('  注意：已有设备配对过，这条是给新设备的；旧设备的令牌不受影响。');
+    }
+    log('');
+  } else {
+    log('');
+    log(`  已配对设备 ${devices.list().length} 台，本次不生成配对码。`);
+    log('  要换手机/重装 App：加 --pair 重新启动，会打印一个新码。');
     log('');
   }
   connect();
@@ -162,7 +208,7 @@ server.listen(port, host, () => {
 
 server.on('error', (e) => {
   if (e?.code === 'EADDRINUSE') {
-    log(`端口 ${port} 已被占用。换一个：--listen 127.0.0.1:8790`);
+    log(`端口 ${port} 已被占用。换一个：node src/main.js --listen 0.0.0.0:8790`);
   } else {
     log(`HTTP 服务出错：${e?.message ?? e}`);
   }
