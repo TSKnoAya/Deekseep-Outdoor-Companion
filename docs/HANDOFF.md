@@ -5,6 +5,47 @@
 
 ---
 
+## 快照：2026-10-30 22:37–22:50（真机装上但卡在配对：做了双击启动器）
+
+### 用户要求
+
+> 「之前的 .apk 我装在红米 K80 上，它可以启动，但我不知道网关地址和 6 位配对码」
+
+结论：App 没问题，是**电脑端网关没启动**——地址和码只在网关窗口里打印。
+
+### 排查出的三个拦路石（都已处理）
+
+| 拦路石 | 处理 |
+| --- | --- |
+| 这台电脑**没有系统 node**（PATH 里只有 WorkBuddy 自带的） | `start-gateway.bat` 自动找：PATH → `%ProgramFiles%\nodejs` → **DSH 自带运行时**（v24.21.0，实测能跑网关） |
+| Windows 防火墙三个 profile 全开、**无 8788 放行规则** | 脚本首次启动用 UAC 提权添加 `DSH-Mobile-Gateway-8788`（实测已添加并 Enabled）；失败提示「右键 → 以管理员身份运行」 |
+| App 地址框把 `192.168.1.247:8788` **误标红** | `ChatScreen.kt` 改判据（含空格 / 无冒号才算错），提示改成「会自动补 http://」 |
+
+### 改了什么
+
+| 改动 | 落点 |
+| --- | --- |
+| 双击启动器 | 新增 `mobile-gateway/start-gateway.bat`（纯 ASCII + `chcp 65001`，中文全交给 node 打印） |
+| App 文案与校验 | `ChatScreen.kt` 帮助弹窗改为「双击 start-gateway.bat」；地址框判据修正 |
+| APK 重打包 | `mobile-gateway/app-debug-0.1.0.apk`（17.5 MB，BUILD SUCCESSFUL 30s） |
+| 文档 | case 文档新增 §12（含 .bat 编码/代码页两个坑） |
+
+### 已验证
+
+- `start-gateway.bat` 实测：找到 node → 添加防火墙规则 → 打印
+  `http://192.168.1.247:8788` 与 `配对码 650750` → `DSH 已连接`。
+- `Get-NetFirewallRule DSH-Mobile-Gateway-8788` → Enabled / Inbound / Allow。
+- DSH 自带 node v24.21.0 跑网关正常（`--listen 127.0.0.1:8795 --pair` 打印码并连上 DSH）。
+- 已清空 `devices.json`（删掉 6 台 e2e-smoke 测试设备），用户手机是「首台」。
+
+### 没验证 / 下一步
+
+- 用户还没真正配对成功过（要他自己双击 bat 抄码）。
+- 手机与电脑同 Wi-Fi、密码正确未确认。
+- 配对成功后第一件事：发一句话看有没有回复（模型已在 §11 打通，理论上应该通）。
+
+---
+
 ## 快照：2026-10-30 21:38–22:00（打通模型：端到端**第一次真正跑通**）
 
 ### 用户要求

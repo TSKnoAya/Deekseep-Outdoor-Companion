@@ -197,10 +197,17 @@ private fun PairingScreen(state: AppState, vm: ChatViewModel) {
             placeholder = { Text("http://192.168.1.10:8788") },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
-            isError = state.baseUrl.isNotBlank() && !state.baseUrl.startsWith("http"),
+            // 这里曾经写成「不以 http 开头就标红」，而实际是会自动补 http://——
+            // 用户填 192.168.1.247:8788 看到红框会以为自己填错了（实测被问到过）。
+            // 只有真的不像地址（含空格 / 没有冒号）才算错。
+            isError = state.baseUrl.isNotBlank() &&
+                (state.baseUrl.contains(" ") || !state.baseUrl.contains(":")),
             supportingText = {
-                if (state.baseUrl.isNotBlank() && !state.baseUrl.startsWith("http")) {
-                    Text("会自动补上 http://")
+                if (state.baseUrl.isNotBlank()) {
+                    Text(
+                        if (state.baseUrl.startsWith("http")) "例如 http://192.168.1.247:8788"
+                        else "会自动补上 http://（也可以直接粘电脑窗口里那行完整地址）",
+                    )
                 }
             },
         )
@@ -256,10 +263,11 @@ private fun PairingScreen(state: AppState, vm: ChatViewModel) {
             title = { Text("怎么拿到配对码") },
             text = {
                 Column {
-                    Text("1. 在电脑上打开命令行，进入 mobile-gateway 目录")
-                    Text("2. 运行：node src/main.js --listen 0.0.0.0:8788")
-                    Text("   （必须带 --listen，否则只监听本机回环，手机连不上）")
-                    Text("3. 窗口会打印两样东西：")
+                    Text("1. 在电脑上进入 mobile-gateway 目录")
+                    Text("2. 双击 start-gateway.bat（会自己找 node，不用装环境）")
+                    Text("   ；没有这个文件就命令行运行：")
+                    Text("   node src/main.js --listen 0.0.0.0:8788")
+                    Text("3. 那个窗口会打印两样东西（窗口别关）：")
                     Text(
                         "   手机端「网关地址」填：\n   http://192.168.1.247:8788\n   配对码 717842（5 分钟内有效）",
                         fontFamily = FontFamily.Monospace,
@@ -267,7 +275,7 @@ private fun PairingScreen(state: AppState, vm: ChatViewModel) {
                     )
                     Spacer(Modifier.height(8.dp))
                     Text("注意：电脑和手机要在同一个 Wi-Fi；Windows 防火墙首次要允许「专用网络」。")
-                    Text("配对码过期或换手机：加 --pair 重启，会打印新码。")
+                    Text("配对码过期或换手机：重新双击 start-gateway.bat，会打印新码。")
                 }
             },
             confirmButton = { TextButton(onClick = { showHelp = false }) { Text("知道了") } },
