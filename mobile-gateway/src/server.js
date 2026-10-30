@@ -159,11 +159,16 @@ export function createGatewayServer(deps) {
 
   function handleAdminStatus(req, res) {
     const acp = deps.getAcp();
+    const listen = deps.admin?.listen?.() ?? null;
+    // 手机要填的不是 0.0.0.0（那是"所有网卡"），而是本机的真实 IP。
+    // 这里直接把候选地址算好给界面用，免得用户自己拼。
+    const addresses = deps.admin?.addresses?.() ?? [];
     sendJson(
       res,
       ok({
         version: meta.version ?? '?',
-        listen: deps.admin?.listen?.() ?? null,
+        listen,
+        addresses,
         stateDir: meta.stateDir ?? null,
         dshExe: meta.dshExe ?? null,
         dsh: {

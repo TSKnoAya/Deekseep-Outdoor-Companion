@@ -812,3 +812,25 @@ curl http://127.0.0.1:5115/dsh-mobile-gateway/api/status
 
 **这证明「设置页 → 插件 host → 网关 → 真实状态」整条代理链是通的**，
 不只是"页面能显示"。客户端 JS 的改动要重启 DSH 才加载。
+
+### 16.8 用户反馈：界面上看不到「网关地址」
+
+第一版 ① 只显示了 `监听 0.0.0.0:8788` —— 那是**网卡的"所有地址"**，不是手机该填的东西。
+用户要的是「手机端填哪个 URL」。
+
+修法：
+- 网关 `/admin/status` 新增 `addresses`：`{loopbackOnly, list:[{ip,url,tailscale}]}`
+  （`lanAddresses()` + `isTailscaleIp()` 复用启动横幅那套判断）；
+- 界面 ① 里加一行「手机端『网关地址』填：`http://192.168.1.247:8788` [复制]」；
+  Tailscale 地址会额外标注「外出也能用」；
+- 回环监听时明确写「只监听了 127.0.0.1，手机连不上」+ 怎么改；
+- 一个 IP 都没有时提示「先连 Wi-Fi/网线」；
+- 「复制」用 `navigator.clipboard`，非 https 环境会失败——失败就退化成"请手动选中这行"。
+
+实测：
+
+```
+curl /admin/status
+→ addresses: {"loopbackOnly":false,"list":[{"ip":"192.168.1.247",
+   "url":"http://192.168.1.247:8788","tailscale":false}]}
+```

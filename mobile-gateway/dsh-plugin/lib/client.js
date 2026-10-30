@@ -160,6 +160,16 @@ window.__ModuleLoader__.load({
 
       const running = Boolean(status?.running);
 
+      const copyText = async (text) => {
+        try {
+          await navigator.clipboard.writeText(text);
+          setNote(`已复制：${text}`);
+        } catch {
+          // 非 https 或浏览器不给权限时 clipboard 会失败——退化成让用户手动选
+          setNote(`复制失败，请手动选中这行：${text}`);
+        }
+      };
+
       return h("div", { style: { padding: "4px 2px" } },
         h("h2", { style: { fontSize: "16px", margin: "0 0 4px" } }, "手机网关"),
         h("p", { style: { ...label, marginBottom: "14px" } },
@@ -175,6 +185,22 @@ window.__ModuleLoader__.load({
             ? h("div", null,
                 h(Row, { k: "运行中", v: "是", tone: "#3fb950" }),
                 h(Row, { k: "监听", v: status.listen ? `${status.listen.host}:${status.listen.port}` : "?" }),
+                // 手机该填哪个地址 —— 之前这块只显示 0.0.0.0，用户根本不知道该抄什么
+                h("div", { style: { margin: "6px 0 8px" } },
+                  h("div", { style: { ...label, marginBottom: "4px" } }, "手机端「网关地址」填："),
+                  (status.addresses && status.addresses.loopbackOnly)
+                    ? h("div", { style: { fontSize: "12.5px", color: "#d29922", lineHeight: 1.6 } },
+                        "网关只监听了回环地址（127.0.0.1），手机连不上。",
+                        h("br"), "用 start-gateway.bat 启动，或加 --listen 0.0.0.0:8788。")
+                    : ((status.addresses && status.addresses.list) || []).length
+                      ? (status.addresses.list).map((a) =>
+                          h("div", { key: a.ip, style: { display: "flex", gap: "8px", alignItems: "center", padding: "2px 0", flexWrap: "wrap" } },
+                            h("code", { style: { ...mono, fontSize: "13.5px" } }, a.url),
+                            h("button", { style: btn({ padding: "3px 9px", fontSize: "12px" }), onClick: () => copyText(a.url) }, "复制"),
+                            a.tailscale ? h("span", { style: { fontSize: "11.5px", opacity: 0.8 } }, "Tailscale，外出也能用") : null))
+                      : h("div", { style: { fontSize: "12.5px", color: "#d29922" } },
+                          "没检测到局域网 IP：先连上 Wi-Fi/网线（网关正在监听所有网卡）。"),
+                ),
                 h(Row, { k: "DSH", v: status.dsh?.connected ? `已连接（${status.dsh.name || "?"}）` : "未连接", tone: status.dsh?.connected ? "#3fb950" : "#d29922" }),
                 h(Row, { k: "已配对", v: `${status.devices ?? 0} 台设备` }))
             : h("div", null,

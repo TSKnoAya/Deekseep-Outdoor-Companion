@@ -229,6 +229,22 @@ const server = createGatewayServer({
     dshHome,
     listen: () => listening,
     reloadAcp,
+    // 手机端该填的地址：真实 IP + 端口（回环地址对手机没有意义）
+    addresses: () => {
+      const { host, port } = listening;
+      if (isLoopbackHost(host)) {
+        return { loopbackOnly: true, list: [] };
+      }
+      return {
+        loopbackOnly: false,
+        list: lanAddresses().map((ip) => ({
+          ip,
+          url: `http://${ip}:${port}`,
+          // 100.64.0.0/10 = Tailscale，出门（4G/5G）也能用
+          tailscale: isTailscaleIp(ip),
+        })),
+      };
+    },
   },
   voiceStatus: () => ({
     asrBackend: settings.get().asrBackend,
