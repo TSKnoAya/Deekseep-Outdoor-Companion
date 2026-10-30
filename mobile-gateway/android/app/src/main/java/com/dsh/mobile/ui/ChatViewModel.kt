@@ -1,0 +1,521 @@
+package com.dsh.mobile.ui
+
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import com.dsh.mobile.data.SettingsStore
+import com.dsh.mobile.net.GatewayClient
+import com.dsh.mobile.net.GatewayException
+import com.dsh.mobile.net.SseSubscription
+import com.dsh.mobile.net.StreamEvent
+import com.dsh.mobile.voice.DeviceSpeechRecognizer
+import com.dsh.mobile.voice.HeadsetDetector
+import com.dsh.mobile.voice.SpeechException
+import com.dsh.mobile.voice.Speaker
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+
+/**
+ * 唯一的界面状态 holder。
+ *
+ * 为什么把所有状态塞进一个不可变 data class：Compose 的重组靠状态相等性判断，
+ * 分成十几个 MutableStateFlow 会让「正在思考 + 有新消息 + 有审批」这种组合状态
+ * 出现中间态（界面上闪一下又没有）。单一快照更好推理，也更好测。
+ */
+class ChatViewModel(app: Application) : AndroidViewModel(app) {
+
+    private val store = SettingsStore(app)
+    private val speaker = Speaker(app)
+    private val recognizer = DeviceSpeechRecognizer(app)
+    private val headset = HeadsetDetector(app)
+
+    private var client: GatewayClient? = null
+    private var sse: SseSubscription? = null
+    private var speakJob: Job? = null
+
+    private val _state = MutableStateFlow(AppState(baseUrl = store.baseUrl, asrBackend = store.asrBackend, announceMode = store.announceMode))
+    val state: StateFlow<AppState> = _state.asStateFlow()
+
+    init {
+        if (store.isPaired) {
+            connectAndLoad()
+        }
+    }
+
+    // ── 配对 ──────────────────────────────────────────────────────────────
+
+    fun updateBaseUrl(value: String) {
+        _state.update { it.copy(baseUrl = value) }
+    }
+
+    fun updatePairCode(value: String) {
+        _state.update { it.copy(pairCode = value.filter { c -> c.isDigit() }.take(6)) }
+    }
+
+    /**
+     * 配对。失败时把 hint 放进 state.banner —— **必须**让用户看到下一步，
+     * 不能只 Toast 一句「配对失败」（AGENTS.md §1.7）。
+     */
+    fun pair() {
+        val s = _state.value
+        if (s.baseUrl.isBlank()) {
+            _state.update { it.copy(banner = Banner("先填网关地址", "在电脑上启动网关，它会打印 http://<IP>:8788；把这个地址填进来。", false)) }
+            return
+        }
+        if (s.pairCode.length != 6) {
+            _state.update { it.copy(banner = Banner("配对码是 6 位数字", "看电脑上网关窗口打印的那 6 位数。", false)) }
+            return
+        }
+        viewModelScope.launch {
+            _state.update { it.copy(busy = "pairing") }
+            try {
+                val normalized = normalizeBaseUrl(s.baseUrl)
+                store.baseUrl = normalized
+                val c = GatewayClient(normalized, null)
+                val result = c.pair(s.pairCode, android.os.Build.MODEL ?: "Android")
+                store.token = result.token
+                store.deviceId = result.deviceId
+                client = c
+                _state.update { it.copy(banner = null, busy = null, paired = true, baseUrl = normalized) }
+                loadSessionsAndConnect()
+            } catch (e: GatewayException) {
+                _state.update { it.copy(busy = null, banner = Banner(e.error, e.hint, e.retryable)) }
+            } catch (e: Exception) {
+                _state.update { it.copy(busy = null, banner = Banner("配对失败：${e.message}", "检查地址与配对码后重试。", true)) }
+            }
+        }
+    }
+
+    fun unpair() {
+        sse?.cancel()
+        sse = null
+        client = null
+        store.clearAuth()
+        _state.update { it.copy(paired = false, sessions = emptyList(), messages = emptyList(), currentSessionId = null) }
+    }
+
+    private fun normalizeBaseUrl(raw: String): String {
+        var s = raw.trim()
+        if (!s.startsWith("http://") && !s.startsWith("https://")) s = "http://$s"
+        return s.trimEnd('/')
+    }
+
+    private fun connectAndLoad() {
+        client = GatewayClient(store.baseUrl, store.token)
+        _state.update { it.copy(paired = true) }
+        loadSessionsAndConnect()
+    }
+
+    private fun loadSessionsAndConnect() {
+        val c = client ?: return
+        viewModelScope.launch {
+            try {
+                val health = c.health()
+                _state.update { it.copy(dshConnected = health.dshConnected, gatewayVersion = health.version, banner = null) }
+                if (!health.dshConnected) {
+                    _state.update {
+                        it.copy(banner = Banner("网关在，但 DSH 没连上", "电脑上确认 DSH 已启动并登录。网关会自动重连，不用管它。", true))
+                    }
+                }
+                val sessions = c.listSessions()
+                _state.update { it.copy(sessions = sessions) }
+                val target = store.lastSessionId?.takeIf { id -> sessions.any { it.sessionId == id } }
+                    ?: sessions.firstOrNull()?.sessionId
+                if (target == null) {
+                    createSession()
+                } else {
+                    openSession(target)
+                }
+            } catch (e: GatewayException) {
+                _state.update { it.copy(banner = Banner(e.error, e.hint, e.retryable)) }
+            }
+        }
+    }
+
+    // ── 会话 ──────────────────────────────────────────────────────────────
+
+    fun createSession(cwd: String? = null) {
+        val c = client ?: return
+        viewModelScope.launch {
+            try {
+                val created = c.createSession(cwd)
+                store.lastSessionId = created.sessionId
+                _state.update { it.copy(sessions = c.listSessions()) }
+                openSession(created.sessionId)
+            } catch (e: GatewayException) {
+                _state.update { it.copy(banner = Banner(e.error, e.hint, e.retryable)) }
+            }
+        }
+    }
+
+    fun openSession(sessionId: String) {
+        sse?.cancel()
+        store.lastSessionId = sessionId
+        _state.update {
+            it.copy(
+                currentSessionId = sessionId,
+                messages = emptyList(),
+                streamingText = "",
+                thinking = false,
+                approvals = emptyList(),
+                banner = null,
+            )
+        }
+        val c = client ?: return
+        sse = SseSubscription(
+            c,
+            sessionId,
+            object : SseSubscription.Listener {
+                override fun onEvent(event: StreamEvent) = handleEvent(event)
+                override fun onClosed(reason: String) {
+                    _state.update { st ->
+                        if (st.streamLostReason == reason) st
+                        else st.copy(streamLostReason = reason)
+                    }
+                    // 自动重连：网关在 hello 里补发状态，所以重连不会丢「正在思考」
+                    viewModelScope.launch {
+                        delay(2000)
+                        if (store.lastSessionId == sessionId) {
+                            _state.update { it.copy(streamLostReason = null) }
+                            reconnectStream(sessionId)
+                        }
+                    }
+                }
+            },
+        ).also { it.start() }
+    }
+
+    private fun reconnectStream(sessionId: String) {
+        sse?.cancel()
+        val c = client ?: return
+        sse = SseSubscription(
+            c,
+            sessionId,
+            object : SseSubscription.Listener {
+                override fun onEvent(event: StreamEvent) = handleEvent(event)
+                override fun onClosed(reason: String) {
+                    _state.update { it.copy(streamLostReason = reason) }
+                    viewModelScope.launch {
+                        delay(4000)
+                        if (store.lastSessionId == sessionId) {
+                            _state.update { it.copy(streamLostReason = null) }
+                            reconnectStream(sessionId)
+                        }
+                    }
+                }
+            },
+        ).also { it.start() }
+    }
+
+    private fun handleEvent(event: StreamEvent) {
+        when (event) {
+            is StreamEvent.Hello -> _state.update { it.copy(thinking = event.running) }
+
+            is StreamEvent.TurnStart -> _state.update {
+                it.copy(thinking = true, streamingText = "", lastTurnFailed = null)
+            }
+
+            is StreamEvent.Text -> _state.update { it.copy(streamingText = it.streamingText + event.text) }
+
+            is StreamEvent.ApprovalRequest -> _state.update {
+                it.copy(approvals = it.approvals + ApprovalUi(
+                    id = event.approvalId,
+                    toolCallId = event.toolCallId,
+                    options = event.options,
+                ))
+            }
+
+            is StreamEvent.TurnEnd -> {
+                val s = _state.value
+                if (event.ok) {
+                    val full = event.text?.takeIf { it.isNotBlank() } ?: s.streamingText
+                    val message = ChatMessage(role = Role.Assistant, text = full.trim())
+                    _state.update {
+                        it.copy(
+                            messages = if (message.text.isBlank()) it.messages else it.messages + message,
+                            streamingText = "",
+                            thinking = false,
+                            approvals = emptyList(),
+                            lastTurnFailed = null,
+                        )
+                    }
+                    if (message.text.isNotBlank()) maybeAnnounce(message.text)
+                } else {
+                    _state.update {
+                        it.copy(
+                            thinking = false,
+                            streamingText = "",
+                            approvals = emptyList(),
+                            // 失败必须留痕在对话流里，不能只闪一下 banner
+                            messages = it.messages + ChatMessage(
+                                role = Role.Error,
+                                text = event.error ?: "本轮失败",
+                                hint = event.hint,
+                            ),
+                            lastTurnFailed = event.code,
+                        )
+                    }
+                }
+            }
+
+            StreamEvent.QueueCleared -> _state.update { it.copy(queuedNotice = null) }
+
+            is StreamEvent.Unknown -> Unit
+        }
+    }
+
+    // ── 发消息 ────────────────────────────────────────────────────────────
+
+    fun send(text: String) {
+        val c = client ?: return
+        val s = _state.value
+        val sessionId = s.currentSessionId ?: run {
+            createSession()
+            return
+        }
+        val body = text.trim()
+        if (body.isEmpty()) return
+
+        _state.update {
+            it.copy(
+                messages = it.messages + ChatMessage(role = Role.User, text = body),
+                input = "",
+                thinking = true,
+            )
+        }
+
+        viewModelScope.launch {
+            try {
+                val r = c.sendMessage(sessionId, body)
+                if (r.queued > 0) {
+                    _state.update { it.copy(queuedNotice = "前面还有 ${r.queued} 条在跑，已排队") }
+                }
+            } catch (e: GatewayException) {
+                _state.update {
+                    it.copy(
+                        thinking = false,
+                        messages = it.messages + ChatMessage(role = Role.Error, text = e.error, hint = e.hint),
+                    )
+                }
+            }
+        }
+    }
+
+    fun updateInput(value: String) = _state.update { it.copy(input = value) }
+
+    fun cancelTurn() {
+        val c = client ?: return
+        val sid = _state.value.currentSessionId ?: return
+        viewModelScope.launch {
+            try {
+                c.cancel(sid)
+                _state.update { it.copy(thinking = false, queuedNotice = null) }
+            } catch (e: GatewayException) {
+                _state.update { it.copy(banner = Banner(e.error, e.hint, e.retryable)) }
+            }
+        }
+    }
+
+    // ── 审批 ──────────────────────────────────────────────────────────────
+
+    fun answerApproval(approvalId: String, optionId: String) {
+        val c = client ?: return
+        viewModelScope.launch {
+            try {
+                c.answerApproval(approvalId, optionId)
+                _state.update { st -> st.copy(approvals = st.approvals.filterNot { it.id == approvalId }) }
+            } catch (e: GatewayException) {
+                _state.update { st ->
+                    st.copy(
+                        approvals = st.approvals.filterNot { it.id == approvalId },
+                        banner = Banner(e.error, e.hint, e.retryable),
+                    )
+                }
+            }
+        }
+    }
+
+    // ── 语音输入 ──────────────────────────────────────────────────────────
+
+    fun startVoiceInput() {
+        val s = _state.value
+        if (s.recording) return
+
+        if (s.asrBackend == "device-native") {
+            _state.update { it.copy(recording = true, banner = null) }
+            viewModelScope.launch {
+                try {
+                    val text = recognizer.listen()
+                    _state.update { it.copy(recording = false) }
+                    send(text)
+                } catch (e: SpeechException) {
+                    _state.update { it.copy(recording = false, banner = Banner(e.error, e.hint, false)) }
+                } catch (e: Exception) {
+                    _state.update {
+                        it.copy(recording = false, banner = Banner("语音识别失败：${e.message}", "再试一次，或切到「本机网关识别」。", true))
+                    }
+                }
+            }
+        } else {
+            // 网关识别：需要先录一段 16k 单声道 PCM16 WAV 再上传
+            _state.update {
+                it.copy(
+                    banner = Banner(
+                        "本机网关识别还没接录音",
+                        "这条路径需要先录 16kHz 单声道 WAV。当前版本请先切到「手机本地转写」，或在电脑上直接发。",
+                        false,
+                    ),
+                )
+            }
+        }
+    }
+
+    // ── 播报 ──────────────────────────────────────────────────────────────
+
+    private fun maybeAnnounce(text: String) {
+        val s = _state.value
+        if (s.announceMode == "off") return
+        if (!s.announceEnabled) return
+
+        val headsetOn = headset.isHeadsetConnected()
+        val decision = decideLocally(text, s.announceMode, headsetOn)
+        if (!decision.first) return
+
+        speakJob?.cancel()
+        speakJob = viewModelScope.launch {
+            try {
+                speaker.ensureReady()
+                speaker.speak(decision.second)
+            } catch (e: SpeechException) {
+                // 播报失败不能打断对话流——只给一个可关闭的提示
+                _state.update { it.copy(banner = Banner("播报失败", e.hint, false)) }
+            } catch (e: Exception) {
+                _state.update { it.copy(banner = Banner("播报失败", "可以先用文字；反复失败就在设置里关掉播报。", false)) }
+            }
+        }
+    }
+
+    /** 本地版的播报决策（和网关 announce.js 保持同步）。 */
+    private fun decideLocally(text: String, mode: String, headsetOn: Boolean): Pair<Boolean, String> {
+        val readable = Speaker.stripForSpeech(text)
+        if (readable.isBlank()) return false to ""
+        if (!readable.any { it.isLetterOrDigit() }) return false to ""
+        if (mode == "headset-only" && !headsetOn) return false to ""
+        val limit = 80
+        return if (mode == "all") {
+            true to if (readable.length <= limit) readable else Speaker.firstSentence(readable, limit)
+        } else {
+            true to if (readable.length <= limit) readable else Speaker.firstSentence(readable, limit)
+        }
+    }
+
+    fun stopSpeaking() {
+        speakJob?.cancel()
+        speaker.stop()
+    }
+
+    fun toggleAnnounceEnabled() = _state.update { it.copy(announceEnabled = !it.announceEnabled) }
+
+    /**
+     * 切换播报档位。**立刻生效**（写本地 + 尝试同步网关）。
+     * 网关同步失败不阻塞本地——离线也要能改设置。
+     */
+    fun setAnnounceMode(mode: String) {
+        store.announceMode = mode
+        _state.update { it.copy(announceMode = mode) }
+        val c = client ?: return
+        viewModelScope.launch {
+            try {
+                c.putSettings(buildJsonObject {
+                    put("announceMode", JsonPrimitive(mode))
+                })
+            } catch (_: Exception) {
+                // 本地已生效；网关侧下次连接会以本地为准
+            }
+        }
+    }
+
+    fun setAsrBackend(backend: String) {
+        store.asrBackend = backend
+        _state.update { it.copy(asrBackend = backend) }
+        val c = client ?: return
+        viewModelScope.launch {
+            try {
+                c.putSettings(buildJsonObject {
+                    put("asrBackend", JsonPrimitive(backend))
+                })
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    fun dismissBanner() = _state.update { it.copy(banner = null) }
+
+    fun retryLastThing() {
+        val s = _state.value
+        _state.update { it.copy(banner = null) }
+        if (!s.paired) return
+        if (s.currentSessionId == null) loadSessionsAndConnect()
+        else reconnectStream(s.currentSessionId!!)
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        sse?.cancel()
+        speakJob?.cancel()
+        speaker.shutdown()
+    }
+}
+
+// ── 状态模型 ──────────────────────────────────────────────────────────────
+
+data class AppState(
+    val baseUrl: String = "",
+    val pairCode: String = "",
+    val paired: Boolean = false,
+    val busy: String? = null,
+    val gatewayVersion: String? = null,
+    val dshConnected: Boolean = false,
+    val sessions: List<com.dsh.mobile.net.SessionInfo> = emptyList(),
+    val currentSessionId: String? = null,
+    val messages: List<ChatMessage> = emptyList(),
+    val streamingText: String = "",
+    val thinking: Boolean = false,
+    val approvals: List<ApprovalUi> = emptyList(),
+    val input: String = "",
+    val recording: Boolean = false,
+    val banner: Banner? = null,
+    val streamLostReason: String? = null,
+    val queuedNotice: String? = null,
+    val lastTurnFailed: String? = null,
+    val asrBackend: String = "gateway-sherpa",
+    val announceMode: String = "short",
+    val announceEnabled: Boolean = true,
+)
+
+data class ChatMessage(
+    val role: Role,
+    val text: String,
+    val hint: String? = null,
+)
+
+enum class Role { User, Assistant, Error }
+
+data class ApprovalUi(
+    val id: String,
+    val toolCallId: String?,
+    val options: List<com.dsh.mobile.net.ApprovalOption>,
+)
+
+/**
+ * 顶部提示条。`retryable` 决定要不要显示「重试」按钮——
+ * 配置类错误重试没用，应该引导用户去改设置。
+ */
+data class Banner(val title: String, val hint: String, val retryable: Boolean)

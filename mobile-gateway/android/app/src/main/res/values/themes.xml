@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      用 Material3 自带主题即可。这里只固定两件事：
+      1. 用 Dale（深海蓝）做主色，和网关那边的终端配色一致；
+      2. 状态栏/导航栏跟随主题，避免暗色模式下白底刺眼。
+    -->
+    <style name="Theme.DshMobile" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">#0B1B2B</item>
+        <item name="android:navigationBarColor">#0B1B2B</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>

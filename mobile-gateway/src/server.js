@@ -1,0 +1,455 @@
+/**
+ * 网关的 HTTP 服务：把 ACP 会话包装成手机能用的 REST + SSE。
+ *
+ * 为什么是 REST + SSE 而不是 WebSocket：
+ * - 手机端 OkHttp/Retrofit 对 SSE 有一等支持，断线重连语义清晰；
+ * - 单向推送场景（服务端→手机）SSE 足够，双向只有「发消息/审批」两个动作，
+ *   REST 更简单也更好调试（curl 就能测）；
+ * - WebSocket 要多维护一套握手/心跳/重连，而这里并没有双向高频通信的需求。
+ *
+ * 为什么不用任何框架：Node 内置 http 足够，且零依赖意味着
+ * 用户 `npm install` 不用等（甚至完全不用装依赖）。
+ */
+
+import http from 'node:http';
+import { CODES, fail, toFailure, ok, requireThat } from './errors.js';
+import { ANNOUNCE_MODES } from './voice/announce.js';
+
+const MAX_JSON_BODY = 4 * 1024 * 1024; // 4MB；音频走专门的 /v1/asr 且单独限长
+const MAX_AUDIO_BODY = 24 * 1024 * 1024;
+
+/**
+ * 创建一个网关 HTTP 服务（不 listen，由调用方决定端口/地址，便于测试）。
+ *
+ * @param {object} deps
+ * @param {object} deps.devices - DeviceStore
+ * @param {object} deps.getAcp - () => AcpClient；未连接时返回 null
+ * @param {object} deps.hub - SessionHub
+ * @param {object} deps.approvals - ApprovalRegistry
+ * @param {object} deps.asr - BackendRegistry
+ * @param {object} deps.tts - BackendRegistry
+ * @param {object} deps.settings - { get(), set(patch) }
+ * @param {(msg:string, data?:any)=>void} [deps.log]
+ * @param {object} [deps.meta] - { version, dshHome, dshExe }
+ */
+export function createGatewayServer(deps) {
+  const log = deps.log || (() => {});
+  const meta = deps.meta ?? {};
+
+  const server = http.createServer((req, res) => {
+    handle(req, res).catch((e) => {
+      const failure = toFailure(e);
+      // 状态码必须来自错误本身，不能一律 500：
+      // 400/404/503 这些是「用户能自救」的失败，返回 500 会让 App 显示
+      // 「服务器内部错误」，用户永远不知道该去改什么（单测抓到的）。
+      const status = Number.isInteger(e?.status) ? e.status : 500;
+      if (res.headersSent) return tryEnd(res);
+      sendJson(res, failure, status);
+    });
+  });
+
+  // ── 路由 ────────────────────────────────────────────────────────────────
+
+  async function handle(req, res) {
+    const url = new URL(req.url, `http://${req.headers.host ?? 'localhost'}`);
+    const pathname = url.pathname;
+
+    // 预检：手机端在开发时可能跨域
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204, corsHeaders(req));
+      res.end();
+      return;
+    }
+
+    // ① 不需要鉴权的两个端点
+    if (pathname === '/v1/pair' && req.method === 'POST') return handlePair(req, res);
+    if (pathname === '/v1/health' && req.method === 'GET') return handleHealth(req, res);
+    if (pathname === '/' && req.method === 'GET') return handleRoot(req, res);
+
+    // ② 其余全部要鉴权
+    const device = authenticate(req);
+    if (!device) {
+      const f = toFailure(
+        fail(CODES.UNAUTHORIZED, '设备未配对或令牌无效', {}),
+      );
+      return sendJson(res, f, 401);
+    }
+    res.setHeader('X-Device-Id', device.id);
+
+    // ③ 具体路由
+    if (pathname === '/v1/sessions' && req.method === 'GET') return handleListSessions(req, res);
+    if (pathname === '/v1/sessions' && req.method === 'POST') return handleCreateSession(req, res);
+
+    const streamMatch = pathname.match(/^\/v1\/sessions\/([^/]+)\/stream$/);
+    if (streamMatch && req.method === 'GET') return handleStream(req, res, decodeURIComponent(streamMatch[1]));
+
+    const promptMatch = pathname.match(/^\/v1\/sessions\/([^/]+)\/messages$/);
+    if (promptMatch && req.method === 'POST') return handlePrompt(req, res, decodeURIComponent(promptMatch[1]));
+
+    const cancelMatch = pathname.match(/^\/v1\/sessions\/([^/]+)\/cancel$/);
+    if (cancelMatch && req.method === 'POST') return handleCancel(req, res, decodeURIComponent(cancelMatch[1]));
+
+    const closeMatch = pathname.match(/^\/v1\/sessions\/([^/]+)\/close$/);
+    if (closeMatch && req.method === 'POST') return handleCloseSession(req, res, decodeURIComponent(closeMatch[1]));
+
+    if (pathname === '/v1/approvals' && req.method === 'GET') return handleListApprovals(req, res, url);
+
+    const approveMatch = pathname.match(/^\/v1\/approvals\/([^/]+)$/);
+    if (approveMatch && req.method === 'POST') return handleAnswerApproval(req, res, decodeURIComponent(approveMatch[1]));
+
+    if (pathname === '/v1/asr' && req.method === 'POST') return handleAsr(req, res);
+    if (pathname === '/v1/tts' && req.method === 'POST') return handleTts(req, res);
+    if (pathname === '/v1/voice/backends' && req.method === 'GET') return handleVoiceBackends(req, res);
+    if (pathname === '/v1/announce' && req.method === 'POST') return handleAnnounce(req, res);
+
+    if (pathname === '/v1/settings' && req.method === 'GET') return handleGetSettings(req, res);
+    if (pathname === '/v1/settings' && req.method === 'PUT') return handlePutSettings(req, res);
+    if (pathname === '/v1/devices' && req.method === 'GET') return sendJson(res, ok({ devices: deps.devices.list() }));
+    if (pathname === '/v1/devices' && req.method === 'POST') return handleIssuePairCode(req, res);
+
+    return sendJson(res, toFailure(fail(CODES.NOT_FOUND, `没有这个接口：${pathname}`, {})), 404);
+  }
+
+  // ── 鉴权 ────────────────────────────────────────────────────────────────
+
+  function authenticate(req) {
+    const header = String(req.headers.authorization ?? '');
+    const token = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
+    if (!token) return null;
+    return deps.devices.verify(token);
+  }
+
+  // ── 各端点实现 ──────────────────────────────────────────────────────────
+
+  function handleRoot(req, res) {
+    sendJson(
+      res,
+      ok({
+        name: 'dsh-mobile-gateway',
+        version: meta.version ?? '0.0.0',
+        hint: '这是网关。手机 App 用 /v1/* 接口；配对请先在电脑端点「生成配对码」。',
+      }),
+    );
+  }
+
+  function handleHealth(req, res) {
+    const acp = deps.getAcp();
+    const voice = deps.voiceStatus ? deps.voiceStatus() : {};
+    sendJson(
+      res,
+      ok({
+        version: meta.version ?? '0.0.0',
+        uptimeMs: Math.round(process.uptime() * 1000),
+        dsh: {
+          connected: Boolean(acp?.initialized),
+          server: acp?.serverInfo ?? null,
+          exe: meta.dshExe ?? null,
+        },
+        devices: deps.devices.list().length,
+        voice,
+      }),
+    );
+  }
+
+  async function handlePair(req, res) {
+    const body = await readJson(req, MAX_JSON_BODY);
+    const result = deps.devices.pair({
+      code: body.code,
+      deviceName: body.deviceName ?? req.headers['user-agent'] ?? '手机',
+    });
+    log(`新设备配对成功：${result.deviceId}`);
+    sendJson(res, ok(result));
+  }
+
+  async function handleListSessions(req, res) {
+    const acp = requireAcp();
+    const sessions = await acp.listSessions();
+    sendJson(res, ok({ sessions }));
+  }
+
+  async function handleCreateSession(req, res) {
+    const acp = requireAcp();
+    const body = await readJson(req, MAX_JSON_BODY);
+    const cwd = String(body.cwd ?? meta.defaultCwd ?? process.cwd());
+    const created = await acp.newSession({ cwd, mcpServers: body.mcpServers ?? [] });
+    log(`新建会话 ${created.sessionId}（cwd=${cwd}）`);
+    sendJson(res, ok(created));
+  }
+
+  async function handlePrompt(req, res, sessionId) {
+    const acp = requireAcp();
+    const body = await readJson(req, MAX_JSON_BODY);
+    const text = String(body.text ?? '').trim();
+    requireThat(text.length > 0, CODES.BAD_REQUEST, '消息内容是空的', {});
+
+    const submitted = deps.hub.submit(sessionId, async (ctx) => {
+      // 审批请求要挂到 registry 上，并推给手机。
+      //
+      // 这里的 Promise 由 ApprovalRegistry 负责兑现：`settle` 就是它的 resolve。
+      // 三条路都只会调用一次 settle —— 手机回答、超时取消、会话关闭清理，
+      // 所以不需要任何轮询（原先那版用 setInterval 偷看 registry，既浪费又会漏）。
+      acp.onPermissionRequest = (request) =>
+        new Promise((resolve) => {
+          const entry = deps.approvals.add(request, (outcome) => {
+            // 把结果回给 ACP；无论来源是用户点击还是超时，都走这一条
+            try {
+              acp.answerPermission(request.rpcId, outcome.optionId ?? outcome.outcome);
+            } catch (e) {
+              log(`回传审批结果失败：${e?.message ?? e}`);
+            }
+            resolve(outcome);
+          });
+          ctx.emit({ type: 'approval_request', approval: entry });
+        });
+
+      const result = await acp.prompt({
+        sessionId,
+        text,
+        onText: (chunk) => ctx.emit({ type: 'text', text: chunk }),
+      });
+      return { stopReason: result.stopReason, text: result.text };
+    });
+
+    sendJson(res, ok({ sessionId, ...submitted }), 202);
+  }
+
+  async function handleCancel(req, res, sessionId) {
+    const acp = requireAcp();
+    await acp.cancel(sessionId);
+    const cleared = deps.hub.clearQueue(sessionId);
+    sendJson(res, ok({ cancelled: true, ...cleared }));
+  }
+
+  async function handleCloseSession(req, res, sessionId) {
+    const acp = requireAcp();
+    deps.approvals.clearSession(sessionId);
+    deps.hub.dispose(sessionId);
+    await acp.closeSession(sessionId).catch(() => {});
+    sendJson(res, ok({ closed: sessionId }));
+  }
+
+  /**
+   * SSE 流。
+   *
+   * 关键点：先补发当前状态（`hello`），再接后续增量。
+   * 不这样做的话，手机在「任务已开始但还没结束」时重连，会看不到任何东西，
+   * 只能等到下一轮——而正式场景里一轮可能跑十分钟。
+   */
+  function handleStream(req, res, sessionId) {
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+      ...corsHeaders(req),
+    });
+
+    const send = (event) => {
+      try {
+        res.write(`data: ${JSON.stringify(event)}\n\n`);
+      } catch {
+        /* 连接已断，由 close 事件清理 */
+      }
+    };
+
+    send({ type: 'hello', sessionId, status: deps.hub.status(sessionId) });
+
+    // 重连补发未回答的审批
+    for (const a of deps.approvals.list(sessionId)) send({ type: 'approval_request', approval: a });
+
+    const unsubscribe = deps.hub.subscribe(sessionId, send);
+    // 心跳：防中间设备掐掉空闲连接
+    const ping = setInterval(() => {
+      try {
+        res.write(': ping\n\n');
+      } catch {
+        /* ignore */
+      }
+    }, 15_000);
+    ping.unref?.();
+
+    const cleanup = () => {
+      clearInterval(ping);
+      unsubscribe();
+    };
+    req.on('close', cleanup);
+    res.on('close', cleanup);
+    res.on('error', cleanup);
+  }
+
+  async function handleListApprovals(req, res, url) {
+    sendJson(res, ok({ approvals: deps.approvals.list(url.searchParams.get('sessionId') || null) }));
+  }
+
+  async function handleAnswerApproval(req, res, approvalId) {
+    const body = await readJson(req, MAX_JSON_BODY);
+    const optionId = String(body.optionId ?? '').trim();
+    requireThat(optionId.length > 0, CODES.BAD_REQUEST, '缺少 optionId', {
+      hint: '传 "allow-once" / "reject-once" / "cancelled" 之一。',
+    });
+    const result = deps.approvals.answer(approvalId, optionId);
+    log(`审批 ${approvalId} → ${optionId}`);
+    sendJson(res, ok(result));
+  }
+
+  async function handleAsr(req, res) {
+    const url = new URL(req.url, 'http://localhost');
+    const backendId = url.searchParams.get('backend') || deps.settings.get().asrBackend;
+    const backend = deps.asr.require(backendId);
+    requireThat(
+      backend.gatewayTranscribe !== false,
+      CODES.ASR_NOT_CONFIGURED,
+      `后端 ${backend.id} 不在网关上做识别`,
+      { hint: '「手机本地转写」是在手机上完成的，直接把识别出的文字当普通消息发。' },
+    );
+
+    const audio = await readBinary(req, MAX_AUDIO_BODY);
+    requireThat(audio.length > 0, CODES.AUDIO_INVALID, '没有收到音频数据', {});
+    const result = await backend.transcribe({
+      audio,
+      mime: String(req.headers['content-type'] ?? 'audio/wav'),
+      language: url.searchParams.get('language') || 'auto',
+    });
+    sendJson(res, ok(result));
+  }
+  async function handleTts(req, res) {
+    const body = await readJson(req, MAX_JSON_BODY);
+    const backendId = body.backend || deps.settings.get().ttsBackend;
+    const backend = deps.tts.require(backendId);
+    const result = await backend.synthesize({ text: body.text, voice: body.voice });
+    // 直接返回二进制音频，省掉 base64 膨胀
+    res.writeHead(200, {
+      'Content-Type': result.mime ?? 'audio/wav',
+      'Content-Length': result.audio.length,
+      'Cache-Control': 'no-store',
+      ...corsHeaders(req),
+    });
+    res.end(result.audio);
+  }
+
+  async function handleVoiceBackends(req, res) {
+    const [asr, tts] = await Promise.all([deps.asr.describe(), deps.tts.describe()]);
+    sendJson(
+      res,
+      ok({
+        asr: { ...asr, selected: deps.settings.get().asrBackend },
+        tts: { ...tts, selected: deps.settings.get().ttsBackend },
+        announceModes: ANNOUNCE_MODES,
+      }),
+    );
+  }
+
+  async function handleAnnounce(req, res) {
+    const body = await readJson(req, MAX_JSON_BODY);
+    const { decideAnnouncement } = await import('./voice/announce.js');
+    const decision = decideAnnouncement({
+      text: body.text,
+      mode: body.mode || deps.settings.get().announceMode,
+      headsetConnected: Boolean(body.headsetConnected),
+    });
+    sendJson(res, ok(decision));
+  }
+
+  function handleGetSettings(req, res) {
+    sendJson(res, ok({ settings: deps.settings.get(), announceModes: ANNOUNCE_MODES }));
+  }
+
+  async function handlePutSettings(req, res) {
+    const body = await readJson(req, MAX_JSON_BODY);
+    const next = deps.settings.set(body ?? {});
+    sendJson(res, ok({ settings: next }));
+  }
+
+  async function handleIssuePairCode(req, res) {
+    const issued = deps.devices.issuePairCode();
+    sendJson(res, ok(issued));
+  }
+
+  function requireAcp() {
+    const acp = deps.getAcp();
+    if (!acp || !acp.initialized) {
+      throw fail(CODES.ACP_NOT_RUNNING, 'DSH 还没连上', {
+        hint: '在电脑上确认网关已启动、DSH 已登录；网关会自动重连。',
+      });
+    }
+    return acp;
+  }
+
+  return server;
+}
+
+// ── HTTP 小工具 ────────────────────────────────────────────────────────────
+
+function corsHeaders(req) {
+  const origin = String(req.headers.origin ?? '');
+  return {
+    'Access-Control-Allow-Origin': origin || '*',
+    'Access-Control-Allow-Methods': 'GET,POST,PUT,OPTIONS',
+    'Access-Control-Allow-Headers': 'Authorization,Content-Type',
+    'Access-Control-Max-Age': '600',
+  };
+}
+
+function sendJson(res, payload, status = 200) {
+  const body = JSON.stringify(payload);
+  res.writeHead(status, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Content-Length': Buffer.byteLength(body),
+    'Cache-Control': 'no-store',
+  });
+  res.end(body);
+}
+
+function tryEnd(res) {
+  try {
+    res.end();
+  } catch {
+    /* 已经关了 */
+  }
+}
+
+/** 读 JSON 体，带体积上限。超限直接抛结构化错误，不要等它读完。 */
+export function readJson(req, limit) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    req.on('data', (chunk) => {
+      size += chunk.length;
+      if (size > limit) {
+        reject(fail(CODES.AUDIO_TOO_LARGE, `请求体太大（>${Math.round(limit / 1024 / 1024)}MB）`, {}));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => {
+      const text = Buffer.concat(chunks).toString('utf8').trim();
+      if (!text) return resolve({});
+      try {
+        resolve(JSON.parse(text));
+      } catch {
+        reject(fail(CODES.BAD_REQUEST, '请求体不是合法 JSON', {}));
+      }
+    });
+    req.on('error', reject);
+  });
+}
+
+/** 读二进制体（音频）。 */
+export function readBinary(req, limit) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    req.on('data', (chunk) => {
+      size += chunk.length;
+      if (size > limit) {
+        reject(fail(CODES.AUDIO_TOO_LARGE, `音频太大（>${Math.round(limit / 1024 / 1024)}MB）`, {}));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
+}

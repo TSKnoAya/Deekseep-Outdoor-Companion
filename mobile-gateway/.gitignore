@@ -1,0 +1,16 @@
+node_modules/
+
+# Android 构建产物与机器相关配置
+android/.gradle/
+android/.kotlin/
+android/app/build/
+android/build/
+android/local.properties
+*.apk
+*.aab
+
+# 本地调试残留
+_dbg.*
+_dbg.log
+_test-run.log
+*.log

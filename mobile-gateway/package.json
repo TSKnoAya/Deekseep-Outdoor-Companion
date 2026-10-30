@@ -1,0 +1,15 @@
+{
+  "name": "dsh-mobile-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "DSH 手机端网关：ACP stdio ↔ HTTP/SSE，含语音后端插件化",
+  "main": "src/main.js",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "start": "node src/main.js",
+    "test": "node --test test/"
+  }
+}

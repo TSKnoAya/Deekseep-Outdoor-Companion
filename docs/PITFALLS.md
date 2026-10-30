@@ -2885,3 +2885,15 @@ Node 读文件后删除；不再解析 stdout。所有「浏览…」共用此�
 - **根因**：`ADMIN_MID_RE` 限 4~15 位，超出被 `normalizeAdmin` 静默清空；前端无提示、保存无报错。
 - **修法**（0.7.18）：放宽到 4~20 位；非法值返回 `admin.mid-invalid` + hint；输入框提示位数；
   另加「核查 UID 与昵称」（查 B站 名片比对真实昵称）。
+
+## 测试“通过”了，其实是被判 cancelled
+
+- **现象**：`node test/run-all.js` 汇总 `tests 85 / pass 81 / fail 0`——**fail 是 0**，看着像全绿，
+  实际有 4 条从未执行（状态是 `cancelled`）。
+- **根因**：`src/acp-client.js` 的请求超时计时器用 `timer.unref()`（刻意的：别让一个待触发的超时
+  把 Node 进程钉住）。而 node:test 在事件循环空转时，会把仍挂起的用例判成 `cancelled`
+  并保持 `fail 0`。之前偶然有别的活句柄撑着循环，所以时过时不过——顺序依赖的偶发。
+- **修法**（2026-10-30，`mobile-gateway/test/acp-client.test.js`）：用例自己拿一个 1000ms 的 ref
+  定时器撑住事件循环，断言完 `clearTimeout`；连跑 3 次 `pass 85 / cancelled 0`。
+- **教训**：验收命令必须同时断言 `pass` 与 `cancelled` 两个数；**`cancelled ≠ 通过`**。
+  凡是“用 `unref()` 的计时器驱动断言”的测试，都要自己撑住循环。

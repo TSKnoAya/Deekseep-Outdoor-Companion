@@ -5,6 +5,43 @@
 
 ---
 
+## 快照：2026-10-30 20:30–20:40（手机端 App 搬进仓库 + APK 构建通过）
+
+### 用户要求
+
+> 「接着往下继续做」（上一轮停在：网关 85 条测试通过、Android 代码写完，但工程还在沙箱里、APK 没构建）
+
+### 改了什么
+
+| 改动 | 落点 |
+| --- | --- |
+| 工程从沙箱搬进仓库 | `state/slang-agent/mobile-gateway/` → **`mobile-gateway/`**（排除 `android/app/build`、`.gradle`、`.kotlin`，62MB → 397KB） |
+| 新增子工程 `.gitignore` | 忽略 `node_modules/`、Android 构建产物、`local.properties`、`*.apk`、`_dbg.*` |
+| 修 flaky 用例 | `mobile-gateway/test/acp-client.test.js`：超时用例自己撑住事件循环（详见 PITFALLS 新条目「测试『通过』了，其实是被判 cancelled」） |
+| 修 2 处 Kotlin 编译错误 | `android/.../ui/ChatViewModel.kt`：`put("announceMode", mode)` → `put(..., JsonPrimitive(mode))`，补 import |
+| 目录索引登记 | `docs/FOLDER_MAP.md` 新增 `mobile-gateway/` 一行 |
+| 路线登记 | `docs/ROADMAP.md` §3 新增候选 **F**（收益/成本/风险/回滚四列已补）、§2 追加里程碑条目 |
+| case 文档收尾 | `mobile-gateway/docs/cases/2026-10-30-dsh-mobile-app.md` 补 §6 真实构建结果、§7 上真机三步、§8 本轮续做记录 |
+
+### 已验证
+
+- `cd mobile-gateway && node test/run-all.js` → **tests 85 / pass 85 / fail 0 / cancelled 0**，连跑 3 次稳定。
+- `gradle assembleDebug`（JDK21 + SDK 在 `D:\dsh-android`）→ **BUILD SUCCESSFUL in 47s**。
+- 产物：`android/app/build/outputs/apk/debug/app-debug.apk`（17,436,189 字节，gitignore）；
+  副本 `mobile-gateway/app-debug-0.1.0.apk`（同样被 `*.apk` 忽略，纯粹方便装机）。
+- `aapt2 dump badging` → `package name='com.dsh.mobile' versionName='0.1.0' minSdkVersion='26' targetSdkVersion='35'`。
+
+### 没验证 / 交接
+
+- **真机（红米 K80）一次都没跑过**：没装、没配对、没发过消息。下一步按 case 文档 §7 的三步走。
+- **ACP `agent_message_chunk` 运行期样本**仍缺（只在真进程里出现，沙箱跑不出来）。
+- **手机录音上传**未实现：`gateway-sherpa` 这条 ASR 路只到接口，App 里点麦克风会提示「请先切到手机本地转写」（有意为之的诚实失败）。
+- **火山 TTS** 按用户要求「先跳过」，只留接口与结构化报错。
+- 网关端口/防火墙：手机与电脑需同一局域网，防火墙要放行，具体端口见 `mobile-gateway/src/config.js`。
+- 本次**不动根 `package.json`、不改版本号**：`mobile-gateway/` 是独立子工程，不参与 `npm test` / `test:audit`。
+
+---
+
 ## 快照：2026-10-29 17:00–17:50（语音包离线导入 + local/cloud 候选包）
 
 ### 用户要求
