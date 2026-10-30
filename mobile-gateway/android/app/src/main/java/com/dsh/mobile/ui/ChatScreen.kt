@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -74,6 +75,13 @@ fun ChatScreen(state: AppState, vm: ChatViewModel) {
     }
 
     Scaffold(
+        // 键盘弹出时整个 Scaffold 上移。
+        // 之前 imePadding 加在**内容 Column** 上：内容缩了，但 bottomBar（输入框）
+        // 是 Scaffold 单独放在屏幕底部的，仍然被键盘压住（真机反馈过）。
+        // 正确位置是 Scaffold 自己 —— 它带着 topBar 和 bottomBar 一起抬起来。
+        modifier = Modifier.imePadding(),
+        // 系统栏由 topBar / bottomBar 各自处理，避免和上面的 imePadding 重复计算
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
         topBar = {
             TopAppBar(
                 title = {
@@ -107,9 +115,7 @@ fun ChatScreen(state: AppState, vm: ChatViewModel) {
         Column(
             Modifier
                 .padding(padding)
-                .fillMaxSize()
-                .imePadding()
-                .navigationBarsPadding(),
+                .fillMaxSize(),
         ) {
             state.banner?.let { banner ->
                 BannerCard(banner) { vm.dismissBanner() }
@@ -179,6 +185,7 @@ private fun PairingScreen(state: AppState, vm: ChatViewModel) {
         Modifier
             .fillMaxSize()
             .statusBarsPadding()
+            .imePadding()
             .padding(24.dp),
         verticalArrangement = Arrangement.Center,
     ) {
@@ -413,7 +420,9 @@ private fun ApprovalCard(approval: ApprovalUi, onAnswer: (String) -> Unit) {
 private fun Composer(state: AppState, vm: ChatViewModel) {
     Surface(color = MaterialTheme.colorScheme.surface, tonalElevation = 2.dp) {
         Row(
-            Modifier.fillMaxWidth().padding(8.dp),
+            // navigationBarsPadding：沉浸式下导航栏平时是隐藏的（inset 为 0），
+            // 但用户上滑唤出时会临时出现，那时不能让输入框被压住。
+            Modifier.fillMaxWidth().navigationBarsPadding().padding(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             OutlinedTextField(

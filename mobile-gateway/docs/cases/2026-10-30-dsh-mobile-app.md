@@ -688,3 +688,27 @@ adb shell am start -n com.dsh.mobile/.MainActivity
 - 返回 true 表示已接管，调用方不再写错误卡。
 
 **教训**：**异步协议的错误可能来自事件流而不是响应体**。判断「错误从哪来」比写重试更重要。
+
+### 15.5 键盘弹出挡住输入框
+
+用户第三次真机反馈。原因：`imePadding()` 加在了 **Scaffold 的内容 Column** 上，
+但 Scaffold 的 `bottomBar`（输入栏）是单独贴屏幕底部绘制的 —— 内容缩了，输入栏不动，
+于是被键盘压住。
+
+修法：
+
+```kotlin
+Scaffold(
+    modifier = Modifier.imePadding(),          // 整个 Scaffold（含 bottomBar）一起抬起
+    contentWindowInsets = WindowInsets(0,0,0,0), // 避免与 topBar/bottomBar 的 inset 重复计算
+    ...
+)
+```
+
+- 内容 Column 去掉 `imePadding()`；
+- `Composer` 的 Row 加 `navigationBarsPadding()`：沉浸式下导航栏平时隐藏（inset 0），
+  上滑唤出时不压住输入框；
+- 配对页 `PairingScreen` 也补 `imePadding()`（输配对码时同样会被键盘挡）。
+
+> 验证限制：小米 MIUI 默认禁止 `adb shell input tap`（`Injecting input events requires
+> INJECT_EVENTS permission`），所以触发键盘这一步只能由用户手点，无法脚本化。
