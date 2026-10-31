@@ -5,6 +5,223 @@
 
 ---
 
+## 快照：2026-10-31 20:20（修：插件同路径双方法 → 「方法不对」405）
+
+- 现象：④ 点「开启」红字「方法不对」；GET 正常。
+- 根因：DSH webServer 按路径注册，`/api/persona` 的 GET、PUT 各注册一次 → 后者被覆盖，
+  PUT 落到只剩 GET 的路由 → 包装器 405。③「保存并生效」同样中招。
+- 修法：`dsh-plugin/lib/index.js` 改为每路径只注册一次、内部按 method 分发；
+  新增 `test/plugin-routes.test.js`（假 ctx 复现「后注册覆盖前注册」语义）。
+- 验证：`node test/run-all.js` **193/193**；待重启 DSH 后手点开启/保存。
+- 文档：case §24、PITFALLS「同路径注册两次」。
+
+---
+
+## 快照：2026-10-31 20:10（手机独立选鱼）
+
+- 之前「④ 手机上是哪条鱼」只是**桌面当前角色**的镜像（读 `characters/current.json`），不能选。
+- 现在：④ 卡片在 `characters/index.json` 里有多条鱼时给出下拉：
+  「跟随桌面当前（X）」或固定某条；选择落 `config.json.personaCharacterId`。
+- 切角色会在下一轮**强制重新注入**（不受 4 次上限限制，前缀写明「角色已经换成 X」）；
+  固定的角色被删 → 回退桌面当前 + `selectionMissing` 黄字提示。
+- 环境变量 `DSH_MOBILE_PERSONA_CHARACTER` 可覆盖（空串 = 跟随桌面）。
+- 验证：`node test/run-all.js` **187/187**；真实数据只读 GET 正常（characters=[大肥鱼]）。
+- 未验证：两条鱼之间的真实切换（本机只有 1 条，下拉按设计不显示）。
+- 生效：**重启网关 + 重启 DSH**；旧会话建议新开。
+
+---
+
+## 快照：2026-10-31 20:05（修：扫码页误报「相机打不开」）
+
+- 现象：点「扫码配对」红字 `相机打不开：The coroutine scope left the composition`。
+- 根因：Compose 取消异常（`LeftCompositionCancellationException`）被 `catch (Exception)` 当业务错误显示；
+  起因是 `LaunchedEffect(previewView, key)` 把组合期写入的 `mutableStateOf` 当 key，effect 半路被重组取消。
+- 修法：PreviewView 改用 `AtomicReference`（非状态）、key 只用重试计数、通用 catch 前先放行
+  `CancellationException`、真异常 `Log.e("QrScanScreen", ...)`。
+- 验证：`assembleDebug` 成功、dex 确认含新代码、已装真机；**待用户实测取景**。
+- 文档：case §22、PITFALLS「取消不是失败」。
+
+---
+
+## 快照：2026-10-31 19:45–20:05（设置页一键启动网关）
+
+### 用户要求
+
+> 「需要一个不依赖改代码就能拉起网关的按钮」
+
+（背景：DSH 设置里显示网关「关闭」——网关是独立进程，用户得自己去双击 bat。）
+
+### 做了什么
+
+| 事 | 落点 |
+| --- | --- |
+| 插件宿主启动器 | 新增 `dsh-plugin/lib/gateway-process.js`：node 探测 → spawn `main.js --listen 0.0.0.0:8788 --pair` → 12 秒内探 `/v1/health`；日志写 `<DSH_HOME>/mobile-gateway/gateway.log` |
+| 接口 | 插件 `/status` 不再把「网关没跑」当错误，返回 `running/managed/log/lastError`；新增 `POST /start`、`POST /stop` |
+| 页面 | ① 卡片右上角「启动网关」/「停止网关」；失败时红块显示原因 + 日志尾部 + 日志路径 |
+| 生命周期 | 按钮启动的网关随 DSH 退出停止（`ctx.effect` + `taskkill /T /F`，连 ACP 一起收）；bat 起的不受影响 |
+
+### 验证
+
+- `node test/run-all.js` → **174/174**（新增 3 条：node 探测顺序、真起假网关→重复启动→停止、秒退失败带 code/hint/日志）
+- 真实 `main.js` 在 8791 端口：**325ms** HTTP up → health ok → stop 后端口释放
+- 未验证：DSH 设置页里手点按钮（需重启 DSH）；`ELECTRON_RUN_AS_NODE` 兜底路径（本机有 DSH 自带 node）
+
+### 生效
+
+**重启 DSH** 才会加载新的插件宿主与设置页代码。
+
+---
+
+## 快照：2026-10-31 19:10–19:40（扫码配对：保留手动输入，额外加二维码）
+
+### 用户要求
+
+> 「保留现在的手动输入配对，额外增加扫码配对」
+
+### 做了什么
+
+| 事 | 落点 |
+| --- | --- |
+| 二维码生成（网关） | `mobile-gateway/src/pair-qr.js`：载荷 `dshmobile://pair?v=1&u=<地址>&c=<码>`；`qrMatrix()` 出 `{size, rows}`。编码用 vendored `src/vendor/qrcode-generator.cjs`（MIT，**必须 .cjs**） |
+| 设置页 ② 卡片 | 生成后画内联 SVG 二维码（绕开 CSP）、多地址切换、5 分钟倒计时；无地址/回环/生成失败都有黄色可行动提示 |
+| 手机扫码 | `ui/QrScanScreen.kt`：CameraX + ZXing core（不用 GMS/ML Kit，国行机可用）；权限拒绝 / 相机被占用都有重试与「去系统设置」 |
+| 深链 | Manifest 注册 `dshmobile://pair`；系统相机/微信扫到点链接可直接唤起 App，**只填地址与码、不自动配对**（外部链接不可信，要用户看清地址再点） |
+| 解析 | `pair/PairPayload.kt`（与网关同一格式的两处实现，改格式要同步） |
+
+### 验证
+
+- `node test/run-all.js` → **171/171**（新增 pair-qr 8 条、server 2 条）
+- `gradle testDebugUnitTest` → PairPayloadTest **5/5**
+- `gradle assembleDebug` → BUILD SUCCESSFUL，APK **20,696,951 字节**（+2.8MB，CameraX/ZXing）
+- 用 jsQR 1.4.0 独立解码：矩阵 4 个纠错等级全部还原；复刻插件 `qrSvg()` 的路径算法也能解码（370 段）
+
+### 没验证（下一个我别当成已验）
+
+- 真机摄像头对着电脑屏幕的实际扫码（需要人拿着扫）
+- HyperOS 系统相机/微信对 `dshmobile://` 深链的「打开 App」弹窗
+- 设置页多地址切换的观感
+
+### 生效
+
+网关重启（`src/*`）→ 设置页能生成二维码；DSH 重启（插件 client.js）→ 卡片出现二维码；
+手机需重装 APK。
+
+---
+
+## 快照：2026-10-31 09:55（对齐 v0.7.22 + 人格分层）
+
+### 当前事实
+
+- **HEAD**：`c7df162 feat(telemetry): Phase 0A 遥测`（0.7.22 后）
+- **package.json version**：`0.7.22`（编辑会话未改版本）
+- **工作区**：干净
+- 本会话上一段（10-29）的离线导入、中文路径、管理员称呼修复均已进 v0.7.0–v0.7.4。
+
+### 本次新增（2026-10-31 10:15，0.7.22 后，Phase 0A）
+
+- **上下文/成本遥测（只测量）**：
+  - `src/context-telemetry.js`：旁路 JSONL，记录唤醒、模型 usage、工具结果字符数/耗时、turn 起止；
+  - 插件 `session/event` 采所有会话；bridge 在真正投递 wake 时记录 prompt 字符/分段；
+  - `scripts/context-telemetry-report.mjs` 输出按唤醒原因/工具聚合的基线；
+  - 不改 prompt、工具、guard、会话策略；observed/estimated/coverage 缺口明确标注；
+  - 数据：`<repo>/state/context-telemetry-bridge.jsonl` +
+    `~/.dsh/surfcore/context-telemetry-plugin.jsonl`。
+- 测试：`test-context-telemetry`；`npm run test:audit` **94/94**。
+- 未做：Phase 1 工具契约/复合快照；系统提示/工具 schema/历史的精确拆分。
+- 下一步：重启 DSH + QQ 桥接，正常用 3–7 天，跑报告建立基线，再进 Phase 1。
+
+### 本次新增（2026-10-31 09:55，0.7.22 后）
+
+- **人格卡分层（Persona Layers v1）**：
+  - `persona.md` 保留人格核心；新增可选 `persona.daily.md` 与
+    `persona.scenes/{qq-group,qq-private,bili,pet}.md`；
+  - `src/persona-layers.js` 统一组合核心→场景→日常；QQ 群聊/私聊按会话选场景；
+  - B站/桌宠也读各自场景 + 日常；超预算先裁日常/场景；
+  - 角色页三层手动编辑，顶部醒目说明；不做模型自动改写；
+  - `/persona` 逐层读写、按层备份恢复；快照/回档带三层；
+  - 记忆卡/向量记忆未动。
+- 测试：`test-persona-layers`、`test-character-api`、`test-client-contract`；
+  `npm run test:audit` **93/93**（含本批新增）。
+- 未手测：真实 QQ 群聊/私聊注入、B站/桌宠实际提示词、页面三层编辑的浏览器交互。
+
+### v0.7.4 → v0.7.18 发布线
+
+| 版本 | 内容 |
+| --- | --- |
+| 0.7.5–0.7.7 | 更新提示 blocked/自愈、语音三闸门、设置不回弹、安装证据校准 |
+| 0.7.8–0.7.9 | toast 契约修复、zip 更新清单只列 git 跟踪文件、交集校验、tag 归档 |
+| 0.7.10 | 语音页网盘离线包入口（`打开网盘下载（提取码 sxUZ）`） |
+| 0.7.11–0.7.12 | 安装清单改从 git blob 算；发布脚本从 git 对象取内容（修 CRLF 污染） |
+| 0.7.13 | 桌宠安装表单真正提交 + Windows 盘符校验 |
+| 0.7.14 | SnowLuma 手动指定已安装位置 |
+| 0.7.15 | 云端语音失败分类、换路兜底、`state/voice-errors.log`、三步自检 |
+| 0.7.16 | 更新后必须重启 DSH 的提示 |
+| 0.7.17 | 版本发现补 api tags、codeload/镜像回退、失败退避 |
+| 0.7.18 | B站 扫码登录可见/可核查、管理员 UID 4~20 位、非法值不再静默清空 |
+
+### 本次新增（2026-10-30 16:00）
+
+- **插件冲突体检**：设置 → 概览「检查更新」旁新增「插件体检」按钮；
+  `plugins/surfcore/lib/compat.js` 只读扫描 profile bundles / `cordis.patch.yml` / 已安装包 /
+  已知第三方规则 / QQ 工具白名单，输出 `COMPAT_TOOL_DENIED`、`COMPAT_COMPACTION_CONFLICT`、
+  `COMPAT_TOOL_INVENTORY_UNKNOWN`；未知插件标 `unknown`，不冒充兼容。
+- 已知规则在 `plugins/surfcore/lib/compat-rules.js`；第三方可用 `surfcore.compat.json` 声明工具。
+- **闸门事件中心 + 单轮 L3 止血**：`src/gate-events.js`（L0–L3/ack/轮转）、
+  `src/turn-guard.js`（40 步/同 tool+error 3 次/回合内额度）、bridge `guardTurnEvent`
+  → `cancelTurn` + 直接 QQ 通知；概览「安全提醒」卡，L2/L3 弹窗。
+- 本版**未做**单轮费用上限、端口/进程归属、L0/L1 全量生产者接入；报告/文档已标。
+
+### 本次新增（2026-10-30 19:30，0.7.19 后）
+
+- **SnowLuma 断线通道闸门**：`sendWakePromptV2` 开头检查 WS/最近发送失败，不健康就不创建
+  DSH 会话；`sendToQQ`/`onebotSend` 记录成功/失败，连续 3 次失败暂停该会话自动唤醒 30 分钟；
+- SnowLuma `close` 写 L2 `send-channel-down`，`open` 写 L1 恢复；UI SnowLuma 卡显示
+  `diagnosis.hint`，事件中心弹窗给“启动/重启 SnowLuma，确认 3000/3001”的建议；
+- 新增 `test-snowluma-channel-gate`；本批仍未做 `wasted` 精确金额/端口进程体检。
+
+### 本次新增（2026-10-30 23:30，0.7.19 后）
+
+- **语音包退出自动更新**：`updates.components()` 不再登记 `surfvoice-local/cloud`；
+  语音包是离线运行时/模型/vendor 包，不走通用 `updateFromZip`；
+- 语音页加说明：需要新版本时用「重新导入离线包」，导入保留 config/venv/models/vendor；
+- `test-updates-voice` 钉住“不再登记语音包 + 页面说明”。
+
+### 本次新增（2026-10-31，0.7.20 后）
+
+- **一键启动 SurfCore + 一键停止**：概览多选 QQ（含 SnowLuma）/ B站 / 桌宠 / 语音；
+  语音加本地/云端单选；每项独立 `ok/code/error/hint`；
+- `start-selected` / `stop-selected`；停止顺序语音→QQ→B站→桌宠；
+  QQ 停止不关闭 SnowLuma 本体；`overview.launch` 统一状态供各页读取；
+- 新增 `test-launch-components` + 扩展 `test-platform-start-host` / `test-client-contract`。
+
+### 已验证（本会话，2026-10-30）
+
+- `npm run test:audit` → **90/90**（新增 test-snowluma-channel-gate / test-launch-components）；
+- `test-plugin-compat` / `test-gate-events` / `test-snowluma-channel-gate` / `test-launch-components` → 通过。
+- `plugins/surfcore npm test` → **全绿**；
+- 本次新增 `test-plugin-compat` / `test-gate-events`；并修了 3 个 0.7.5 blocked 语义后的过时夹具（`test-updates-version/pending/voice`）。
+
+### 没验证 / 当前待办
+
+- **v0.7.18 的 B站 扫码/登录核查/长 UID 没有在本会话逐项实机复测**；以发布说明和发布会话验证为准。
+- **一键启动/停止、插件体检、L2-L3 弹窗、SnowLuma 断线提示还没有在真实设置页点过**；
+  真实进程启停、真实回合 cancel、SnowLuma 断线零 token 增长需重启 DSH 后手测。
+- **语音离线包导入 UI 仍没在真实设置页点过**（确认框/错误弹窗/删源/删备份）；真实 7.9G 导入已跑通。
+- 语音包许可仍未定：piper GPL、huayan 数据集、age12 微调权重；候选包在 `D:\surfcore-poc\release\`，
+  **不要当公开包直接上传**。
+- 0.7.18 的 `PERMISSIONS.md` 里仍有若干权限项标记“待补程序断言”（上一快照遗留）。
+- `docs/RELEASE-QUEUE.md` 顶部仍留着 0.7.4 之前的历史批次，**没有逐条改成“已发布”**；
+  接手时以 `git log` / `CHANGELOG` / `package.json` 为准，别直接照抄队列标题。
+- 0.7.1–0.7.8 的 zip 用户无法自动升到 0.7.9+，需手动覆盖一次（CHANGELOG 0.7.9 已记录）。
+
+### 下一步建议
+
+1. 先等用户给具体新需求；编辑会话不改 version/tag/推公开仓库。
+2. 若继续语音包：先补 `PERMISSIONS.md` 的权限断言，再决定 piper/huayan/微调权重许可。
+3. 若继续更新/发布链路：按 AGENTS §1.8 三道门禁（git 对象清单 → git 对象发布 → 下载真实归档核对）。
+
+---
+
 ## 快照：2026-10-31 01:00–01:25（P1「把鱼带到手机」+ 深海皮肤）
 
 ### 做了什么

@@ -12,6 +12,8 @@ export const DEFAULT_TOKEN_GUARD = Object.freeze({
   privateMaxWakesPerDay: 10,
   minWakeGapMs: 120000,
   directBypassGap: true,
+  // @ / 叫名字 / 提问 / 拍一拍 也不受每日自动唤醒次数限制（2026-10-31 用户要求）
+  directBypassDay: true,
   maxOutboundPerTurn: 8,
   maxDailyCostCNY: 8,
 });
@@ -33,6 +35,13 @@ export function localDayStart(now = Date.now()) {
  * @param {{key?:string, wakeTimes?:number[], now?:number, guard?:object, cost?:number, direct?:boolean}} opts
  * @returns {{blocked:boolean, error?:string, retryAfterMs?:number, reason?:string, dayCount?:number, maxDay?:number}}
  */
+/** 距本地时间「明天 00:00」还有多少毫秒（day 限额在新一天清零）。 */
+export function msUntilNextLocalDay(now = Date.now()) {
+  const d = new Date(now);
+  const next = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1, 0, 0, 0, 0);
+  return Math.max(1_000, next.getTime() - now);
+}
+
 export function evaluateWakeBudget({ key = '', wakeTimes = [], now = Date.now(), guard = DEFAULT_TOKEN_GUARD, cost = null, direct = false } = {}) {
   const g = { ...DEFAULT_TOKEN_GUARD, ...(guard && typeof guard === 'object' ? guard : {}) };
   if (g.enabled === false) return { blocked: false };
@@ -40,13 +49,19 @@ export function evaluateWakeBudget({ key = '', wakeTimes = [], now = Date.now(),
   const isPrivate = String(key ?? '').startsWith('private:');
   const maxDay = Math.max(0, Math.round(num(isPrivate ? g.privateMaxWakesPerDay : g.maxWakesPerDay, 0)));
   const dayCount = times.filter((t) => t >= localDayStart(now)).length;
-  if (maxDay > 0 && dayCount >= maxDay) {
+  // direct（@ / 叫名字 / 提问 / 拍一拍）是"有人明确在叫"，不能被每日自动唤醒配额挡住：
+  // 否则跨天前主人 @ 也不理（2026-10-31 用户反馈）。可用 directBypassDay=false 关掉。
+  const bypassDay = direct === true && g.directBypassDay !== false;
+  if (maxDay > 0 && dayCount >= maxDay && !bypassDay) {
     return {
       blocked: true,
       reason: 'day',
       dayCount,
       maxDay,
-      error: `Token 防爆破：这个会话今天已经醒了 ${dayCount}/${maxDay} 次，今天不再唤醒`,
+      // 到期时间点拨到本地零点（新一天 dayCount 清零）。桥接据此安排重试；
+      // 以前没有这个字段 → 重试定时器不启动 → 积压未读永远不补。
+      retryAfterMs: Math.max(60_000, msUntilNextLocalDay(now)),
+      error: `Token 防爆破：这个会话今天已经醒了 ${dayCount}/${maxDay} 次，今天不再自动唤醒（@ / 叫名字 / 提问不受限）`,
     };
   }
   const gap = Math.max(0, Math.round(num(g.minWakeGapMs, 0)));

@@ -23,6 +23,7 @@ const private10 = Array.from({ length: 10 }, (_, i) => now - 60_000 * (10 - i));
 const privateBlocked = evaluateWakeBudget({ key: 'private:123', wakeTimes: private10, now, guard: { ...DEFAULT_TOKEN_GUARD, minWakeGapMs: 0 } });
 assert.equal(privateBlocked.blocked, true);
 assert.equal(privateBlocked.reason, 'day');
+assert.ok(privateBlocked.retryAfterMs > 0, 'day 拦截必须带 retryAfterMs（否则桥接不会排重试，积压永远不补）');
 
 // 两次苏醒最小间隔：30 秒前刚醒，要求 120 秒 → 还差 90 秒
 const gap = evaluateWakeBudget({
@@ -32,12 +33,24 @@ const gap = evaluateWakeBudget({
 assert.equal(gap.blocked, true);
 assert.equal(gap.reason, 'gap');
 assert.equal(gap.retryAfterMs, 90_000);
-// 被直接 @ / 叫到：可越过 2 分钟间隔，立即醒；每日次数/花费上限仍然生效
+// 被直接 @ / 叫到：可越过 2 分钟间隔、也可越过每日次数（directBypassDay 默认开）
 const direct = evaluateWakeBudget({
   key: 'group:402', wakeTimes: [now - 30_000], now, direct: true,
   guard: { ...DEFAULT_TOKEN_GUARD, minWakeGapMs: 120_000, maxDailyCostCNY: 0 },
 });
 assert.equal(direct.blocked, false);
+// 每日次数用尽时，direct 仍要能醒（2026-10-31：跨天前主人 @ 也不理）
+const directDay = evaluateWakeBudget({
+  key: 'private:123', wakeTimes: private10, now, direct: true,
+  guard: { ...DEFAULT_TOKEN_GUARD, minWakeGapMs: 0 },
+});
+assert.equal(directDay.blocked, false, 'direct 应豁免每日次数');
+const directDayOff = evaluateWakeBudget({
+  key: 'private:123', wakeTimes: private10, now, direct: true,
+  guard: { ...DEFAULT_TOKEN_GUARD, minWakeGapMs: 0, directBypassDay: false },
+});
+assert.equal(directDayOff.blocked, true, 'directBypassDay=false 时仍按每日次数拦');
+assert.equal(directDayOff.reason, 'day');
 const directOff = evaluateWakeBudget({
   key: 'group:402', wakeTimes: [now - 30_000], now, direct: true,
   guard: { ...DEFAULT_TOKEN_GUARD, directBypassGap: false, minWakeGapMs: 120_000, maxDailyCostCNY: 0 },
@@ -75,6 +88,8 @@ assert.ok(bridge.includes('evaluateWakeBudget'));
 assert.ok(bridge.includes('evaluateOutbound'));
 assert.ok(bridge.includes('directBypassGap'), '桥接没有接 directBypassGap');
 assert.ok(bridge.includes('directWake'), '桥接没有识别直呼唤醒');
+const guardSource = fs.readFileSync(new URL('../src/token-guard.js', import.meta.url), 'utf8');
+assert.ok(guardSource.includes('directBypassDay'), '守卫没有 directBypassDay 开关');
 const wakeFish = bridge.indexOf('const fishWake = evaluateConversationFishGuard');
 const wakeToken = bridge.indexOf('const tokenWake = tokenGuardWakeBlock');
 assert.ok(wakeFish >= 0 && wakeToken > wakeFish, '唤醒顺序必须是鱼群守则 → Token 防爆破');

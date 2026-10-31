@@ -1369,6 +1369,79 @@ F("toolsPath", "bili.mjs 路径", "留空 = 用合体插件自带的 tools/", "t
                 : (working ? "更新中…" : `立即更新（${selected.size}）`)))));
     }
 
+    // 插件冲突体检报告：只读结果；明确写出“未覆盖项”，避免把“没查到”当“兼容”。
+    function CompatModal({ report, error, onClose, onRetry, busy, toast }) {
+      const issues = Array.isArray(report?.issues) ? report.issues : [];
+      const sevLabel = { blocker: "阻断", high: "高风险", warn: "警告", info: "信息" };
+      const confLabel = { confirmed: "已确认", inferred: "按已知规则推断", unknown: "未覆盖/未知" };
+      const copy = async () => {
+        try {
+          await navigator.clipboard.writeText(JSON.stringify(report ?? error, null, 2));
+          toast?.("✓ 报告已复制");
+        } catch (e) {
+          toast?.(`✗ 复制失败：${e.message}；请截图报告`);
+        }
+      };
+      const issueRows = issues.map((it, i) => h("div", {
+        key: `${it.code}-${i}`,
+        style: { border: "1px solid rgba(127,127,127,.25)", borderRadius: "8px", padding: "9px 10px", marginTop: "8px" },
+      },
+        h("div", { style: { display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" } },
+          h("b", null, it.title || it.code),
+          h("span", { className: "qbw-badge " + (it.severity === "blocker" || it.severity === "high" ? "bad" : "warn") },
+            `${sevLabel[it.severity] ?? it.severity} · ${confLabel[it.confidence] ?? it.confidence}`),
+          h("span", { className: "qbw-hint" }, it.code)),
+        h("div", { className: "qbw-hint", style: { marginTop: "3px" } }, `影响：${it.impact || "未说明"}`),
+        h("div", { className: "qbw-hint", style: { marginTop: "2px" } }, `建议：${it.recommendation || "未说明"}`),
+        it.evidence ? h("details", { style: { marginTop: "4px" } },
+          h("summary", { className: "qbw-hint" }, "证据"),
+          h("pre", { className: "qbw-out", style: { maxHeight: "150px", overflow: "auto", marginTop: "3px", whiteSpace: "pre-wrap", wordBreak: "break-all" } },
+            JSON.stringify(it.evidence, null, 2))) : null));
+      const unknown = report?.coverage?.unknownBundles ?? [];
+      return h("div", { className: "qbw-modal-backdrop", onClick: (e) => { if (e.target === e.currentTarget && !busy) onClose?.(); } },
+        h("div", { className: "qbw-modal", style: { width: "min(720px, 94vw)", maxHeight: "86vh", overflow: "auto" } },
+          h("h3", null, error ? "插件体检失败" : "插件冲突体检"),
+          error ? h("div", null,
+            h("div", { className: "qbw-err" }, `${error.code ? `（${error.code}）` : ""}${error.message}`),
+            h("div", { className: "qbw-hint", style: { marginTop: "6px" } }, error.hint || "确认 DSH 已安装、profile 可读后重试。"))
+            : h("div", null,
+              h("div", { className: "qbw-hint" },
+                report?.ok
+                  ? "未发现已知冲突。注意：这不等于“兼容”，未覆盖项见下。"
+                  : "发现需要处理的风险；报告只读，不会自动改配置。"),
+              h("div", { className: "qbw-hint", style: { marginTop: "4px" } },
+                `profile：${report?.profile?.name ?? "未知"} · SurfCore ${report?.versions?.surfcore ?? "?"} · DSH ${report?.versions?.dsh ?? "未知"} · ${report?.scannedAt ?? ""}`),
+              h("div", { className: "qbw-hint", style: { marginTop: "4px" } },
+                `已看：${report?.coverage?.packages ?? 0} 个包 / ${report?.coverage?.bundles?.length ?? 0} 个 bundle；已知工具 ${report?.coverage?.toolsKnown?.length ?? 0} 个`),
+              unknown.length ? h("div", { className: "qbw-hint", style: { color: "#b9770e", marginTop: "4px" } },
+                `未枚举工具的插件 ${unknown.length} 个：${unknown.map((x) => x.name).join("、")}`) : null,
+              (report?.coverage?.unchecked ?? []).length
+                ? h("div", { className: "qbw-hint", style: { marginTop: "2px" } }, `未检查：${report.coverage.unchecked.join("、")}`)
+                : null,
+              h("div", { style: { marginTop: "8px" } }, issues.length ? issueRows : h("div", { className: "qbw-hint" }, "没有已知问题。"))),
+          h("div", { className: "qbw-actions", style: { marginTop: "12px" } },
+            h(Btn, { kind: "qbw-btn2", onClick: copy, disabled: !report && !error }, "复制报告"),
+            h(Btn, { kind: "qbw-btn2", onClick: onRetry, disabled: !!busy }, busy === "compat" ? "体检中…" : "重新体检"),
+            h(Btn, { onClick: onClose, disabled: !!busy }, "关闭"))));
+    }
+
+    // 闸门 L2/L3 弹窗：必须说明“哪个门、挡了什么、影响、下一步”，不能只弹“已拒绝”。
+    function GateAlertModal({ event, onClose, onAck }) {
+      if (!event) return null;
+      const urgent = event.level === "L3";
+      return h("div", { className: "qbw-modal-backdrop", onClick: (e) => { if (e.target === e.currentTarget) onClose?.(); } },
+        h("div", { className: "qbw-modal", style: { width: "min(620px, 94vw)", maxHeight: "86vh", overflow: "auto" } },
+          h("h3", null, urgent ? "安全/成本警报（L3）" : "需要处理的安全提醒（L2）"),
+          h("div", { className: "qbw-hint" }, `${event.level} · ${event.gate} · ${event.event}`),
+          h("p", { style: { marginTop: "8px" } }, event.impact || event.reason?.message || "闸门触发了拦截。"),
+          event.reason?.message ? h("div", { className: "qbw-hint" }, `原因：${event.reason.message}`) : null,
+          event.recommendation ? h("div", { className: "qbw-hint", style: { marginTop: "4px" } }, `建议：${event.recommendation}`) : null,
+          h("div", { className: "qbw-hint", style: { marginTop: "4px" } }, "这条记录会保留；确认后不再自动弹同一事件。"),
+          h("div", { className: "qbw-actions", style: { marginTop: "12px" } },
+            h(Btn, { onClick: () => onAck?.(event.id) }, urgent ? "确认并关闭" : "确认"),
+            h(Btn, { kind: "qbw-btn2", onClick: onClose }, "稍后"))));
+    }
+
     // 通用错误报告弹窗（AGENTS 1.7）：失败必须可见 + 给下一步。
     // 只在"用户必须知道并做个选择"的失败上用；普通提示仍用 toast。
     function ErrorModal({ title, message, hint, tried, actions = [], disabled, onClose }) {
@@ -1400,10 +1473,21 @@ F("toolsPath", "bili.mjs 路径", "留空 = 用合体插件自带的 tools/", "t
       const platformStart = overview?.platformStart ?? {};
       const qqStart = platformStart.qq !== false;
       const biliStart = platformStart.bili !== false;
+      // ── 一键启动 / 停止（QQ+B站+桌宠+语音）────────────────────────────
+      const launch = overview?.launch ?? {};
+      const [launchSel, setLaunchSel] = useState({ qq: true, bili: true, pet: false, voice: false });
+      const [voiceBranch, setVoiceBranch] = useState("voice-local");
+      const [launchResult, setLaunchResult] = useState(null);
+      const [launchErr, setLaunchErr] = useState(null);
       // ── 组件更新（2026-10-26）──────────────────────────────────────────
       // 检查在插件里做（git fetch，只读）；界面只负责展示与确认。
       const updates = overview?.updates ?? {};
       const [updateOpen, setUpdateOpen] = useState(false);
+      const [compat, setCompat] = useState(null);
+      const [compatError, setCompatError] = useState(null);
+      const [gateData, setGateData] = useState(null);
+      const [gateAlert, setGateAlert] = useState(null);
+      const dismissedGates = useRef(new Set());
       // 更新后必须重启 DSH：检查到更新、以及下载完成后都主动提示（只刷新页面不会应用）
       const [restartHint, setRestartHint] = useState(null);
       const [tokenDraft, setTokenDraft] = useState("");
@@ -1443,6 +1527,59 @@ F("toolsPath", "bili.mjs 路径", "留空 = 用合体插件自带的 tools/", "t
           toast(`✗ 检查更新失败：${e.message}`);
           return null;
         } finally { setBusy(""); }
+      };
+      // 插件冲突体检：只读扫描；结果必须带“未覆盖项”，不能把“没查到”说成“兼容”。
+      const runCompat = async () => {
+        setBusy("compat");
+        try {
+          const r = await api("/compat/scan");
+          setCompat(r);
+          setCompatError(null);
+        } catch (e) {
+          setCompat(null);
+          setCompatError({
+            message: String(e.message || e),
+            code: e.code || "",
+            hint: e.hint || "确认 DSH 已安装、DSH_HOME/profiles 可读；必要时重启 DSH 后重试。",
+          });
+        } finally { setBusy(""); }
+      };
+      // 闸门事件：L2/L3 才弹；L0/L1 只留在通知列表，不打断。
+      const gateOverviewRef = useRef(overview);
+      useEffect(() => { gateOverviewRef.current = overview; }, [overview]);
+      const loadGateEvents = useCallback(async () => {
+        try {
+          const r = await api("/gate-events?limit=30&includeAcked=0");
+          let events = r.events ?? [];
+          // 已经连上 SnowLuma 时，旧的「send-channel-down」不该再弹（用户明明连着）。
+          // 顺手自动确认掉，避免每次打开设置页都弹同一个 L2。
+          const connected = gateOverviewRef.current?.bridge?.snowluma?.connected === true;
+          if (connected) {
+            const stale = events.filter((e) => e.dedupeKey === "snowluma:send-channel-down");
+            if (stale.length) {
+              api("/gate-events", { method: "POST", body: { ids: stale.map((e) => e.id) } }).catch(() => {});
+              events = events.filter((e) => !stale.includes(e));
+            }
+          }
+          setGateData({ ...r, events });
+          // 概览还没加载时先不弹：否则无法判断“现在是否其实连着”，会误弹一次旧告警。
+          if (!gateOverviewRef.current) return;
+          const top = events.find((x) => (x.level === "L3" || x.level === "L2") && !dismissedGates.current.has(x.id));
+          if (top) setGateAlert(top);
+          else setGateAlert(null);
+        } catch {}
+      }, []);
+      useEffect(() => {
+        loadGateEvents();
+        const timer = setInterval(loadGateEvents, 15000);
+        return () => clearInterval(timer);
+      }, [loadGateEvents]);
+      const ackGate = async (id) => {
+        try {
+          await api("/gate-events", { method: "POST", body: id ? { ids: [id] } : { all: true } });
+          setGateAlert(null);
+          await loadGateEvents();
+        } catch (e) { toast(`✗ 确认失败：${e.message}`); }
       };
       // pickedPath 为空 = 在常见位置里猜；点了「浏览…」就把用户选的路径传进去验证并保存。
       const detectSnowLuma = async (pickedPath = "") => {
@@ -1498,6 +1635,30 @@ F("toolsPath", "bili.mjs 路径", "留空 = 用合体插件自带的 tools/", "t
           await reload();
         } catch (e) { toast(`✗ ${e.message}`); } finally { setBusy(""); }
       };
+      const runLaunch = async (mode) => {
+        const ids = mode === "stop"
+          ? ["qq", "bili", "pet", "voice"]
+          : Object.entries(launchSel).filter(([, on]) => on).map(([id]) => id);
+        if (!ids.length) { toast("✗ 至少勾选一项"); return; }
+        setBusy(mode === "stop" ? "launch-stop" : "launch-start");
+        setLaunchErr(null);
+        try {
+          const res = await api("/bridge", { method: "POST", body: {
+            action: mode === "stop" ? "stop-selected" : "start-selected",
+            components: ids,
+            voicePack: voiceBranch,
+          } });
+          setLaunchResult({ ...res, _mode: mode });
+          const bad = (res.items ?? []).filter((x) => !x.ok);
+          toast(bad.length
+            ? `✗ ${bad.length} 项失败：${bad.map((x) => x.label).join("、")}`
+            : `✓ ${mode === "stop" ? "已停止" : "已启动"}：${(res.items ?? []).map((x) => x.label).join("、")}`);
+          await reload();
+        } catch (e) {
+          setLaunchErr({ message: e.message, code: e.code, hint: e.hint });
+          toast(`✗ ${mode === "stop" ? "停止" : "启动"}失败：${e.message}${e.hint ? `；${e.hint}` : ""}`);
+        } finally { setBusy(""); }
+      };
       return h("div", null,
         h("div", { className: "qbw-infobox" },
           "一个窗口管两边：QQ 仍然由原来那个桥接进程收发消息，B站仍然用同一份 bili.config.json。",
@@ -1545,13 +1706,43 @@ F("toolsPath", "bili.mjs 路径", "留空 = 用合体插件自带的 tools/", "t
             h("div", { className: "qbw-kv" },
               h("span", null, "B站"),
               h("span", null, biliStart ? (scheduler.running ? "启动开关开 · 生物钟在跑" : "启动开关开 · 未运行") : "启动开关关")),
-            h("div", { className: "qbw-actions" },
-              h(Btn, { onClick: () => act("start-all"), disabled: !!busy || (!qqStart && !biliStart) }, "一键启动（含 SnowLuma）"),
-              h(Btn, { kind: "qbw-btn2", onClick: () => act("start-qq"), disabled: !!busy || !qqStart || Boolean(bridge.running) }, "启动QQ"),
-              h(Btn, { kind: "qbw-btn2", onClick: () => act("start-bili"), disabled: !!busy || !biliStart || Boolean(scheduler.running) }, "启动B站")),
-            h("div", { className: "qbw-actions", style: { borderTop: "none", marginTop: "2px", paddingTop: "2px" } },
+            h("div", { className: "qbw-group", style: { marginTop: "8px" } }, "一键启动 SurfCore"),
+            h("div", { className: "qbw-actions", style: { marginTop: "4px" } },
+              h("label", { className: "qbw-row", style: { alignItems: "center", gap: "6px", marginRight: "10px" } },
+                h("input", { type: "checkbox", checked: launchSel.qq, onChange: (e) => setLaunchSel((v) => ({ ...v, qq: e.target.checked })) }),
+                h("span", null, `QQ（含 SnowLuma）${launch.qq?.running ? " · 运行中" : " · 未运行"}`)),
+              h("label", { className: "qbw-row", style: { alignItems: "center", gap: "6px", marginRight: "10px" } },
+                h("input", { type: "checkbox", checked: launchSel.bili, onChange: (e) => setLaunchSel((v) => ({ ...v, bili: e.target.checked })) }),
+                h("span", null, `B站${launch.bili?.running ? " · 运行中" : " · 未运行"}`)),
+              h("label", { className: "qbw-row", style: { alignItems: "center", gap: "6px", marginRight: "10px" } },
+                h("input", { type: "checkbox", checked: launchSel.pet, onChange: (e) => setLaunchSel((v) => ({ ...v, pet: e.target.checked })) }),
+                h("span", null, `桌宠${launch.pet?.running ? " · 运行中" : (launch.pet?.installed ? " · 未运行" : " · 未安装")}`)),
+              h("label", { className: "qbw-row", style: { alignItems: "center", gap: "6px" } },
+                h("input", { type: "checkbox", checked: launchSel.voice, onChange: (e) => setLaunchSel((v) => ({ ...v, voice: e.target.checked })) }),
+                h("span", null, `语音${launch.voice?.running ? " · 运行中" : " · 未运行"}`))),
+            launchSel.voice ? h("div", { className: "qbw-actions", style: { marginTop: "2px", paddingTop: 0 } },
+              h("span", { className: "qbw-hint" }, "语音分支："),
+              h("label", { className: "qbw-row", style: { alignItems: "center", gap: "4px" } },
+                h("input", { type: "radio", name: "voiceBranch", checked: voiceBranch === "voice-local", onChange: () => setVoiceBranch("voice-local") }),
+                h("span", null, `本地模型${(launch.voice?.installed ?? []).includes("voice-local") ? "" : "（未安装）"}`)),
+              h("label", { className: "qbw-row", style: { alignItems: "center", gap: "4px" } },
+                h("input", { type: "radio", name: "voiceBranch", checked: voiceBranch === "voice-cloud", onChange: () => setVoiceBranch("voice-cloud") }),
+                h("span", null, `云端模型${(launch.voice?.installed ?? []).includes("voice-cloud") ? "" : "（未安装）"}`))) : null,
+            h("div", { className: "qbw-actions", style: { marginTop: "6px" } },
+              h(Btn, { onClick: () => runLaunch("start"), disabled: !!busy }, busy === "launch-start" ? "启动中…" : "一键启动 SurfCore"),
+              h(Btn, { kind: "qbw-btn2", onClick: () => runLaunch("stop"), disabled: !!busy }, busy === "launch-stop" ? "停止中…" : "一键停止（全部）"),
               h(Btn, { kind: "qbw-btn3", onClick: () => goTab?.("qq"), disabled: !!busy }, "去 QQ 页改启动开关"),
               h(Btn, { kind: "qbw-btn3", onClick: () => goTab?.("bili"), disabled: !!busy }, "去 B站 页改启动开关")),
+            [["qq", "QQ"], ["bili", "B站"], ["pet", "桌宠"], ["voice", "语音"]].map(([id, label]) =>
+              launch[id]?.lastError ? h("div", { className: "qbw-hint", key: `launch-err-${id}`, style: { color: "#c0392b", marginTop: "2px" } },
+                `${label}：${launch[id].lastError}`) : null),
+            launchErr ? h("div", { className: "qbw-err", style: { marginTop: "6px" } },
+              `${launchErr.code ? `（${launchErr.code}）` : ""}${launchErr.message}`,
+              launchErr.hint ? h("div", { className: "qbw-hint" }, `建议：${launchErr.hint}`) : null) : null,
+            (launchResult?.items ?? []).length ? h("div", { style: { marginTop: "6px" } },
+              ...(launchResult.items).map((it) => h("div", { className: "qbw-kv", key: it.id },
+                h("span", null, `${it.ok ? "✓" : "✗"} ${it.label}`),
+                h("span", null, it.ok ? (it.message || (launchResult?._mode === "stop" ? "已停止" : "已启动")) : `${it.error || "失败"}${it.hint ? `；${it.hint}` : ""}`)))) : null,
             h("label", { className: "qbw-row", style: { alignItems: "center" } },
               h("span", { className: "qbw-label" }, "一键启动成功后弹窗提示"),
               h("input", {
@@ -1559,7 +1750,7 @@ F("toolsPath", "bili.mjs 路径", "留空 = 用合体插件自带的 tools/", "t
                 checked: unified?.bridge?.startupNotify !== false,
                 onChange: (e) => setUnified(["bridge", "startupNotify"], e.target.checked),
               })),
-            h("div", { className: "qbw-hint" }, "已在跑的服务不会重复启动；QQ 启动时会按需打开已安装的 SnowLuma（仍需你扫码）。人格卡在「角色」页维护（和角色包在一起），这里不再重复显示。")),
+            h("div", { className: "qbw-hint" }, "一键启动会按勾选项启动，已在跑的不重复启动；QQ 会按需打开已安装的 SnowLuma（仍需扫码）。一键停止只停 SurfCore 托管的 QQ 桥接、B站生物钟、桌宠和语音包，不会关闭 SnowLuma 本体。人格卡在「角色」页维护。")),
           h("div", { className: "qbw-card" },
             h("h4", null, "更新 ", (() => {
               const rows = updates.results ?? [];
@@ -1638,6 +1829,7 @@ F("toolsPath", "bili.mjs 路径", "留空 = 用合体插件自带的 tools/", "t
               : null,
             h("div", { className: "qbw-actions" },
               h(Btn, { onClick: () => checkUpdates(), disabled: !!busy }, busy === "updates" ? "检查中…" : "检查更新"),
+              h(Btn, { kind: "qbw-btn2", onClick: runCompat, disabled: !!busy }, busy === "compat" ? "体检中…" : "插件体检"),
               (updates.results ?? []).some((x) => x.status === "unknown" || x.status === "failed")
                 ? h(Btn, {
                   kind: "qbw-btn2",
@@ -1709,9 +1901,25 @@ F("toolsPath", "bili.mjs 路径", "留空 = 用合体插件自带的 tools/", "t
                 : null),
             h("div", { className: "qbw-hint", style: { marginTop: "4px" } },
               "只需要“读公开仓库”的权限；令牌只存在本机 config.json，不会上传，也不会出现在诊断信息里。")),
+          (gateData?.events ?? []).length
+            ? h("div", { className: "qbw-card" },
+              h("h4", null, "安全提醒 ", h("span", { className: "qbw-badge " + ((gateData?.counts?.L3 ?? 0) > 0 ? "bad" : "warn") },
+                `未确认 ${gateData?.counts?.unacked ?? 0} 条`)),
+              (gateData.events ?? []).slice(0, 6).map((ev) => h("div", { className: "qbw-kv", key: ev.id },
+                h("span", null, `${ev.level} · ${ev.gate}`),
+                h("span", null, `${ev.impact || ev.reason?.message || ev.event}${ev.ack ? "" : "（未确认）"}`))),
+              h("div", { className: "qbw-hint" }, "L0 静默、L1 仅记录；L2/L3 才弹窗。"),
+              h("div", { className: "qbw-actions", style: { marginTop: "6px" } },
+                h(Btn, { kind: "qbw-btn2", onClick: () => ackGate(null), disabled: !(gateData?.counts?.unacked > 0) }, "全部确认"),
+                h(Btn, { kind: "qbw-btn2", onClick: loadGateEvents }, "刷新")))
+            : null,
           h(AdvancedSettings, { note: "SnowLuma 安装 / 扩展与平台：装好后很少改" },
             h("div", { className: "qbw-card" },
               h("h4", null, "SnowLuma 安装"),
+              (bridge.running && snow.diagnosis?.state && snow.diagnosis.state !== "ok")
+                ? h("div", { className: "qbw-err", style: { margin: "6px 0" } },
+                  `SnowLuma 连接异常（${snow.diagnosis.state}）：${snow.diagnosis.hint || "请检查 SnowLuma 是否运行并已登录"}`)
+                : null,
               h("p", null, "第一次使用：下载官方 SnowLuma2 → 解压 → 点「检测已安装的 SnowLuma」→ 启动 QQ 并扫码。"),
               h("div", { className: "qbw-kv" }, h("span", null, "当前安装目录"), h("span", null, snow.launcherPath || "未设置")),
               h("div", { className: "qbw-actions" },
@@ -1783,6 +1991,19 @@ F("toolsPath", "bili.mjs 路径", "留空 = 用合体插件自带的 tools/", "t
           toast,
           onClose: () => setUpdateOpen(false),
           onDone: async () => { setUpdateOpen(false); await reload(); },
+        }) : null,
+        (compat || compatError) ? h(CompatModal, {
+          report: compat,
+          error: compatError,
+          busy,
+          toast,
+          onClose: () => { setCompat(null); setCompatError(null); },
+          onRetry: runCompat,
+        }) : null,
+        gateAlert ? h(GateAlertModal, {
+          event: gateAlert,
+          onClose: () => { if (gateAlert) dismissedGates.current.add(gateAlert.id); setGateAlert(null); },
+          onAck: ackGate,
         }) : null);
     }
 
@@ -3143,46 +3364,88 @@ F("socialV2.voice.ffmpegPath", "ffmpeg 路径", "留空走 PATH", "text", { wide
     // 现在只有一个「角色」页：上面切角色，下面直接编辑当前角色的人格卡。
     function PersonaEditor({ busy, setBusy, toast, unified, setUnified }) {
       const [data, setData] = useState(null);
-      const [text, setText] = useState("");
+      const [tab, setTab] = useState("core");
+      const [scene, setScene] = useState("qq-group");
+      const [draft, setDraft] = useState({ core: "", daily: "", scenes: {} });
       const [err, setErr] = useState("");
+      const sceneLabels = data?.sceneLabels ?? { "qq-group": "QQ 群聊", "qq-private": "QQ 私聊", bili: "B站", pet: "桌宠" };
       const load = useCallback(async () => {
-        try { const r = await api("/persona"); setData(r); setText(r.text ?? ""); setErr(""); }
-        catch (e) { setErr(e.message); }
+        try {
+          const r = await api("/persona");
+          const layers = r.layers ?? {};
+          setData(r);
+          setDraft({
+            core: layers.core?.text ?? r.text ?? "",
+            daily: layers.daily?.text ?? "",
+            scenes: layers.scenes ?? {},
+          });
+          setErr("");
+        } catch (e) { setErr(e.message); }
       }, []);
       useEffect(() => { load(); }, [load]);
+      const current = tab === "core" ? draft.core : tab === "daily" ? draft.daily : (draft.scenes?.[scene]?.text ?? "");
+      const currentPath = tab === "core" ? data?.layers?.core?.path : tab === "daily" ? data?.layers?.daily?.path : data?.layers?.scenes?.[scene]?.path;
+      const setCurrent = (value) => {
+        setDraft((d) => {
+          if (tab === "core") return { ...d, core: value };
+          if (tab === "daily") return { ...d, daily: value };
+          return { ...d, scenes: { ...d.scenes, [scene]: { ...(d.scenes?.[scene] ?? {}), text: value } } };
+        });
+      };
       const save = async () => {
         setBusy("persona-save");
         try {
-          const r = await api("/persona", { method: "POST", body: { text } });
-          toast(`✓ 人格卡已保存（${r.chars} 字）`);
+          const body = { layer: tab === "scene" ? "scene" : tab, scene: tab === "scene" ? scene : "", text: current };
+          const r = await api("/persona", { method: "POST", body });
+          toast(`✓ 已保存${tab === "core" ? "人格核心" : tab === "daily" ? "人格日常" : `场景：${sceneLabels[scene] || scene}`}（${r.chars} 字）`);
           await load();
-        } catch (e) { toast(`✗ ${e.message}`); } finally { setBusy(""); }
+        } catch (e) { toast(`✗ ${e.message}${e.hint ? `；${e.hint}` : ""}`); } finally { setBusy(""); }
       };
       const restore = async (name) => {
         setBusy("persona-restore");
-        try { const r = await api("/persona", { method: "POST", body: { action: "restore", name } }); setText(r.text ?? ""); toast("✓ 已从备份恢复"); await load(); }
-        catch (e) { toast(`✗ ${e.message}`); } finally { setBusy(""); }
+        try { await api("/persona", { method: "POST", body: { action: "restore", name } }); toast("✓ 已从备份恢复"); await load(); }
+        catch (e) { toast(`✗ ${e.message}${e.hint ? `；${e.hint}` : ""}`); } finally { setBusy(""); }
       };
+      const layerLabel = tab === "core" ? "人格核心" : tab === "daily" ? "人格日常" : `场景人格：${sceneLabels[scene] || scene}`;
       return h("div", null,
-        h("div", { className: "qbw-infobox" },
-          "当前角色的人格卡：", h("code", { className: "qbw-code" }, data?.path ?? "persona"),
-          "。QQ 桥接每条消息注入它；B站生物钟每次醒来也注入它。角色包切换时，人格卡跟着角色走。"),
-        h(Row, {
-          label: "人格卡文件",
-          hint: "相对 surfcore 或绝对路径；留空自动发现 roles/*.md。改完点底部「保存」；下面的文本编辑用「保存人格卡」。",
+        h("div", { className: "qbw-infobox", style: { borderColor: "#d68910", background: "rgba(214,137,16,.10)" } },
+          h("div", { style: { fontWeight: 700, marginBottom: "4px" } }, "人格卡已分层（本次改动）"),
+          "现在的人格卡拆成三层，全部由你手动编辑，系统不会自动改写：",
+          h("ul", { style: { margin: "4px 0 2px 18px", padding: 0 } },
+            h("li", null, h("b", null, "人格核心"), "：身份、价值观、说话方式、底线；每次必注入，放最前。"),
+            h("li", null, h("b", null, "场景人格"), "：QQ 群聊、QQ 私聊、B站、桌宠分别选择；只注入当前会话的场景。"),
+            h("li", null, h("b", null, "人格日常"), "：近期状态、习惯、心情；放最后，超预算先裁它。")),
+          h("div", { className: "qbw-hint", style: { marginTop: "3px" } },
+            "QQ 群聊/私聊按会话自动选场景；B站/桌宠各用各的。没有填写的层不会注入。保存后下一条 QQ 消息/下一次 B站/桌宠对话生效。")),
+        h("div", { className: "qbw-actions", style: { marginTop: "8px" } },
+          h(Btn, { kind: tab === "core" ? undefined : "qbw-btn2", onClick: () => setTab("core"), disabled: !!busy }, "人格核心"),
+          h(Btn, { kind: tab === "daily" ? undefined : "qbw-btn2", onClick: () => setTab("daily"), disabled: !!busy }, "人格日常"),
+          h(Btn, { kind: tab === "scene" ? undefined : "qbw-btn2", onClick: () => setTab("scene"), disabled: !!busy }, "场景人格")),
+        tab === "scene" ? h("div", { className: "qbw-actions", style: { marginTop: "2px", paddingTop: "2px" } },
+          ...Object.entries(sceneLabels).map(([id, label]) => h(Btn, {
+            key: id, kind: scene === id ? undefined : "qbw-btn3", onClick: () => setScene(id), disabled: !!busy,
+          }, label))) : null,
+        h("div", { className: "qbw-group", style: { marginTop: "8px" } },
+          layerLabel,
+          currentPath ? h("small", null, ` · ${currentPath} · ${current.length} 字`) : null),
+        err ? h("div", { className: "qbw-err" }, err) : null,
+        h("textarea", {
+          className: "qbw-textarea card", value: current, onChange: (e) => setCurrent(e.target.value), spellCheck: false,
+          placeholder: tab === "core" ? "# 角色卡：名字\n\n你是谁、说话方式、价值观、底线…" : tab === "daily" ? "近期状态、习惯、心情、关系温度…（可留空）" : "这个场景下额外的行为方式、称呼、禁忌…（可留空）",
+        }),
+        h("div", { className: "qbw-actions" },
+          h(Btn, { onClick: save, disabled: !!busy }, busy === "persona-save" ? "保存中…" : "保存当前层"),
+          h(Btn, { kind: "qbw-btn2", onClick: load, disabled: !!busy }, "重新读取"),
+          h("span", { className: "qbw-hint" }, "只保存当前选中的层；其它层不动。")),
+        data?.path ? h(Row, {
+          label: "旧人格卡文件（仅兼容）",
+          hint: "角色系统启用时以角色包内的 persona.md 为准；这一栏只给没有角色的旧布局用。",
         }, h("input", {
           className: "qbw-input wide",
           value: unified?.persona?.file ?? "",
           onChange: (e) => setUnified(["persona", "file"], e.target.value),
           placeholder: "roles/你的角色.md",
-        })),
-        h("div", { className: "qbw-group" }, "人格卡内容", data ? h("small", null, `${data.path} · ${data.chars} 字 · ${fmtTime(data.mtime)}`) : null),
-        err ? h("div", { className: "qbw-err" }, err) : null,
-        h("textarea", { className: "qbw-textarea card", value: text, onChange: (e) => setText(e.target.value), spellCheck: false }),
-        h("div", { className: "qbw-actions" },
-          h(Btn, { onClick: save, disabled: !!busy }, busy === "persona-save" ? "保存中…" : "保存人格卡"),
-          h(Btn, { kind: "qbw-btn2", onClick: load, disabled: !!busy }, "重新读取"),
-          h("span", { className: "qbw-hint" }, "保存即生效；QQ 下一条消息、B站下一次醒来就会用新卡。")),
+        })) : null,
         data?.backups?.length ? h(Section, { title: "人格卡历史备份", note: `${data.backups.length} 份` },
           data.backups.slice(0, 12).map((b) => h("div", { key: b.name, className: "qbw-item" },
             h("div", null, h("div", { className: "qbw-label" }, b.name), h("div", { className: "qbw-hint" }, `${fmtBytes(b.bytes)} · ${fmtTime(new Date(b.mtime).toISOString())}`)),
@@ -4009,6 +4272,8 @@ F("socialV2.voice.ffmpegPath", "ffmpeg 路径", "留空走 PATH", "text", { wide
           h("div", { style: { fontSize: "13px", fontWeight: 600 } }, "网络不稳定装不上？用网盘下载离线包（本地包 / 云端包都适用）"),
           h("div", { style: { fontSize: "12px", opacity: 0.85, marginTop: "2px" } },
             "网盘里是完整的离线包。下载解压后，点对应卡片的「导入离线包…」，选择解压出来的 voice-local 或 voice-cloud 文件夹；导入会校验文件、保留旧包备份，失败会告诉你缺什么。"),
+          h("div", { style: { fontSize: "12px", opacity: 0.8, marginTop: "2px" } },
+            "语音包不参与 SurfCore 的「检查更新」：它是离线运行时/模型/vendor 包，不是代码 zip。需要新版本时用「重新导入离线包…」，导入会保留 config.toml、.venv、models、vendor。"),
           h("div", { style: { display: "flex", gap: "8px", marginTop: "8px", flexWrap: "wrap", alignItems: "center" } },
             h(Btn, { onClick: openNetdisk }, "打开网盘下载（提取码 sxUZ）"),
             h(Btn, { kind: "qbw-btn2", onClick: copyNetdisk }, "复制链接"),

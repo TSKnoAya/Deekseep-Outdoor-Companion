@@ -85,6 +85,7 @@ try {
   assert.equal(overview.status, 200);
   assert.deepEqual(overview.data.platformStart, { qq: false, bili: false },
     '/overview 的 platformStart 应反映开关');
+  assert.ok(overview.data.launch?.qq && overview.data.launch?.bili && overview.data.launch?.pet && overview.data.launch?.voice, 'overview 必须带统一 launch 状态');
   assert.equal(overview.data.scheduler.running, false, 'B站 开关关闭时生物钟不应运行');
   assert.equal(overview.data.scheduler.disabled, true, 'B站 开关关闭时 scheduler.disabled 应为 true');
 
@@ -93,6 +94,28 @@ try {
     assert.equal(res.status, 409, `${action} 在开关关闭时应拒绝`);
     assert.match(String(res.data.error ?? ''), /启动开关/, `${action} 的错误文案应说明开关关闭`);
   }
+
+  // 新的一键启动：多选 + 每项结构化结果；平台开关关闭时不允许偷偷拉起。
+  const selected = await invoke(api, 'POST', '/dsh-surfcore/api/bridge', {
+    action: 'start-selected', components: ['qq', 'bili'], voicePack: 'voice-local',
+  });
+  assert.equal(selected.status, 200);
+  assert.equal(selected.data.ok, false, '平台开关关闭时一键启动不能报成功');
+  assert.equal(selected.data.items?.length, 2, '每个勾选项都要有独立结果');
+  for (const item of selected.data.items) {
+    assert.equal(item.ok, false, `${item.id} 应失败`);
+    assert.ok(item.code && item.hint, `${item.id} 失败必须有 code/hint`);
+  }
+  const empty = await invoke(api, 'POST', '/dsh-surfcore/api/bridge', { action: 'start-selected', components: [] });
+  assert.equal(empty.data.code, 'NO_COMPONENTS', '空选择必须结构化拒绝');
+  assert.ok(empty.data.hint, '空选择必须给下一步');
+
+  const stopped = await invoke(api, 'POST', '/dsh-surfcore/api/bridge', {
+    action: 'stop-selected', components: ['qq', 'bili', 'pet', 'voice'],
+  });
+  assert.equal(stopped.status, 200);
+  assert.equal(stopped.data.items?.length, 4, '一键停止要覆盖四项');
+  assert.ok(stopped.data.items.every((x) => x.ok), '未运行的服务停止应幂等成功');
 
   // 一键启动：两个都关 → 跳过两边，不启动任何进程。
   const all = await invoke(api, 'POST', '/dsh-surfcore/api/bridge', { action: 'start-all' });

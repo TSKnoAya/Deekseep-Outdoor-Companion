@@ -156,25 +156,23 @@ for (const action of ['purpose-status', 'purpose-preview', 'purpose-run']) {
 
 // 平台启动开关（2026-10-24 用户要求：不是所有用户都想同时开 QQ / B站）：
 //   · QQ / B站 页各一个「是否启动」开关，写合体层 platforms.start.{qq,bili}；
-//   · 概览的启动卡只留三个动作：一键启动 / 启动QQ / 启动B站；
+//   · 概览启动卡整合成「一键启动 SurfCore / 一键停止（全部）」：
+//     多选 QQ（含 SnowLuma）/ B站 / 桌宠 / 语音；语音有本地/云端分支；
 //   · 人格卡不再在概览重复显示（统一到「角色」页，和角色包在一起）。
 assert.ok(source.includes('function PlatformStartCard'), '缺少平台启动开关卡片');
 assert.ok(source.includes('"platforms", "start", "qq"'), 'QQ 启动开关没有绑定 platforms.start.qq');
 assert.ok(source.includes('"platforms", "start", "bili"'), 'B站 启动开关没有绑定 platforms.start.bili');
 assert.ok(source.includes('h(PlatformStartCard'), 'QQ / B站 页没有渲染启动开关卡片');
-for (const label of ['一键启动', '启动QQ', '启动B站']) {
-  // 「一键启动」按钮文案后面会跟（含 SnowLuma），按前缀认即可。
-  const ok = label === '一键启动'
-    ? source.includes('一键启动')
-    : (source.includes(`>${label}<`) || source.includes(`"${label}"`));
-  assert.ok(ok, `概览启动卡缺少按钮：${label}`);
+for (const label of ['一键启动 SurfCore', '一键停止（全部）', '语音分支']) {
+  assert.ok(source.includes(label), `概览启动卡缺少：${label}`);
 }
-for (const action of ['start-qq', 'start-bili']) {
-  assert.ok(source.includes(`act("${action}")`), `设置页没有调用 ${action}`);
+for (const action of ['start-selected', 'stop-selected']) {
+  assert.ok(source.includes(`"${action}"`), `设置页没有调用 ${action}`);
   assert.ok(pluginIndexSource.includes(`action === '${action}'`), `插件代理缺少 ${action} 动作`);
 }
-assert.ok(!source.includes('启动与人格卡'), '概览不应再出现「启动与人格卡」旧标题');
-assert.ok(!source.includes('一键启动全部（含 SnowLuma）'), '旧的「一键启动全部」按钮应被替换成三个按钮');
+assert.ok(source.includes('voiceBranch'), '语音缺少本地/云端分支选择');
+assert.ok(source.includes('start-qq') || source.includes('start-selected'), '概览缺少启动入口');
+assert.ok(!source.includes('一键启动（含 SnowLuma）'), '旧的一键启动按钮应被整合');
 assert.ok(!source.includes('随 DSH 启动自动拉起 QQ 桥接'), '旧 bridge.autoStart 开关应迁到 QQ 页的「是否启动」');
 assert.ok(source.includes('去 QQ 页改启动开关') && source.includes('去 B站 页改启动开关'), '概览缺少去平台页改开关的入口');
 assert.ok(source.includes('人格卡在「角色」页维护'), '概览移除人格卡后缺少指路文案');
@@ -183,6 +181,11 @@ assert.ok(source.includes('人格卡在「角色」页维护'), '概览移除人
 assert.ok(source.includes('function AdvancedSettings'), '缺少统一的「高级设置」折叠组件');
 assert.ok(source.includes('function Section({ title, note, children, defaultOpen = false, collapsible = true })'), 'Section 必须支持 collapsible（高级设置里不再折叠套折叠）');
 assert.ok(source.includes('function PersonaEditor'), '人格卡编辑器没有抽成内嵌组件');
+assert.ok(source.includes('人格卡已分层'), '人格卡编辑器缺少本次改动/分层说明');
+assert.ok(source.includes('保存当前层'), '人格卡编辑器缺少逐层保存入口');
+assert.ok(source.includes('persona.daily.md') || source.includes('人格日常'), '人格卡编辑器缺少日常层');
+assert.ok(source.includes('QQ 群聊') && source.includes('QQ 私聊'), '人格卡编辑器缺少 QQ 群聊/私聊场景');
+assert.ok(source.includes('不会自动改写'), '人格卡编辑器必须说明是手动编辑，模型不会自动改写');
 assert.ok(source.includes('h(PersonaEditor'), '「角色」页没有渲染人格卡编辑器');
 assert.ok(!source.includes('["persona", "人设"]'), '「人设」标签必须并入「角色」，不能留第二个入口');
 assert.ok(!source.includes('function PersonaTab'), '旧的 PersonaTab 必须删掉，避免两套人格卡入口');
@@ -412,6 +415,15 @@ assert.ok(source.includes('核查 UID 与昵称'), '管理员卡片要有 UID/�
 assert.ok(/api\("\/bili\/verify-user"/.test(source), 'UID 核查要调后端');
 assert.ok(source.includes('4~20 位数字'), 'UID 输入要提示位数范围');
 assert.ok(source.includes('用 B站 昵称填上'), '昵称不一致要能一键填上');
+
+
+
+// ── 断线告警不再“明明连着还弹”（2026-10-31）──
+assert.ok(source.includes('snowluma:send-channel-down'), '前端应识别断线告警的 dedupeKey');
+assert.ok(source.includes('const stale = events.filter'), '连着时应过滤旧断线告警');
+assert.ok(source.includes('body: { ids: stale.map'), '应自动确认旧断线告警');
+assert.ok(source.includes('gateOverviewRef'), '用 overview 判断当前连接状态');
+assert.ok(source.includes('if (!gateOverviewRef.current) return;'), '概览未就绪时不弹，避免误弹');
 
 
 

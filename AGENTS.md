@@ -79,11 +79,16 @@
 2. **发布走 git 对象，不是工作区文件**
    发布脚本必须是 `git show HEAD:<path>` 取内容（`scripts/publish-via-api.mjs` 已如此）；
    **禁止**把工作区字节直接 POST 给 GitHub —— 否则远端存 CRLF，客户端按 LF 校验必然失败。
-3. **发完必须下载真实归档核对，不许只看本地**
+3. **发完必须核对真实制品，不许只看本地**
    ```bash
    curl -sL -o a.zip https://codeload.github.com/<owner>/<repo>/zip/refs/tags/vX.Y.Z
    # 解压后
    node scripts/release-manifest.mjs --verify <解压目录>   # 必须“不符 0 / 缺失 0”
+   ```
+   **codeload 不可达时用备用通道**（等价证据：归档内容就是这些 blob）：
+   ```bash
+   GH_TOKEN=... node scripts/verify-remote-manifest.mjs <owner>/<repo> vX.Y.Z
+   # 必须“一致 N / 不符 0 / 缺失 0”
    ```
 
 **给未来的我**：如果用户反馈"点了更新版本不变"，先看 `lastApplyFailure.code`：

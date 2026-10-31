@@ -115,6 +115,31 @@ try {
   assert.equal(detailA.status, 200);
   assert.match(detailA.data.persona, /甲 的人格卡/);
 
+  // 人格卡分层 API：核心保留 persona.md，日常/场景写入独立文件；保存后能被快照/回档带上。
+  const personaGet = await invoke('GET', '/persona');
+  assert.equal(personaGet.status, 200, JSON.stringify(personaGet.data));
+  assert.ok(personaGet.data.layers?.core?.path?.endsWith('persona.md'));
+  assert.ok(personaGet.data.layers?.daily?.path?.endsWith('persona.daily.md'));
+  for (const scene of ['qq-group', 'qq-private', 'bili', 'pet']) {
+    assert.ok(personaGet.data.layers?.scenes?.[scene]?.path?.endsWith(`${scene}.md`), `缺少场景路径 ${scene}`);
+  }
+  for (const [layer, scene, text] of [
+    ['daily', '', '日常：最近在忙人格分层。'],
+    ['scene', 'qq-group', 'QQ 群聊：先看气氛再开口。'],
+    ['scene', 'qq-private', 'QQ 私聊：对主人更直接。'],
+    ['scene', 'bili', 'B站：不主动带 QQ 群号。'],
+    ['scene', 'pet', '桌宠：更放松。'],
+  ]) {
+    const savedLayer = await invoke('POST', '/persona', { layer, scene, text });
+    assert.equal(savedLayer.status, 200, JSON.stringify(savedLayer.data));
+  }
+  assert.match(fs.readFileSync(pathsB.personaDaily, 'utf8'), /人格分层/);
+  assert.match(fs.readFileSync(pathsB.personaScenes['qq-private'], 'utf8'), /更直接/);
+  const unknownScene = await invoke('POST', '/persona', { layer: 'scene', scene: 'nope', text: 'x' });
+  assert.equal(unknownScene.status, 400);
+  assert.equal(unknownScene.data.code, 'PERSONA_SCENE_UNKNOWN');
+  assert.ok(unknownScene.data.hint, '未知场景必须给下一步');
+
   const snap = await invoke('POST', '/characters', { action: 'snapshot', id: createdB.data.character.id, label: '测试' });
   assert.equal(snap.status, 200, JSON.stringify(snap.data));
   const slot = snap.data.slot;
@@ -127,6 +152,7 @@ try {
   const restored = await invoke('POST', '/characters', { action: 'restore', id: createdB.data.character.id, slot });
   assert.equal(restored.status, 200, JSON.stringify(restored.data));
   assert.match(fs.readFileSync(pathsB.persona, 'utf8'), /乙 的人格卡/);
+  assert.match(fs.readFileSync(pathsB.personaDaily, 'utf8'), /人格分层/, '回档必须恢复人格日常层');
   assert.ok(store.readCurrentCharacter().epoch > 2, '回档后 epoch 必须递增');
 
   const list = await invoke('GET', '/characters');

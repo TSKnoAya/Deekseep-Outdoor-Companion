@@ -43,7 +43,7 @@ try {
   console.log('noMeta:', JSON.stringify({ available: noMeta.available, status: noMeta.status, reason: noMeta.reason }));
   assert.equal(noMeta.available, true, '没有 meta 也应可查');
   assert.ok(!String(noMeta.reason).includes('package.json'), '不应再报读不到 package.json');
-  assert.ok(['update', 'latest', 'unknown'].includes(noMeta.status), `状态应是三态之一：${noMeta.status}`);
+  assert.ok(['update', 'latest', 'unknown', 'blocked'].includes(noMeta.status), `状态应是三态之一（0.7.5 起含 blocked）：${noMeta.status}`);
 
   // 3) 目录里什么都没有 → 明确"还没装"
   const empty = path.join(tmp, 'empty');
@@ -57,5 +57,11 @@ try {
   globalThis.fetch = realFetch;
   fs.rmSync(tmp, { recursive: true, force: true });
 }
+
+// 语音包是离线运行时/模型/vendor 包，不得再进通用自动更新列表（否则 updateFromZip 必然失败）。
+const indexSource = fs.readFileSync(path.resolve('lib/index.js'), 'utf8');
+assert.ok(!/id: 'surfvoice-local'/.test(indexSource), '语音包不得再登记为自动更新组件');
+const clientSource = fs.readFileSync(path.resolve('lib/client.js'), 'utf8');
+assert.ok(clientSource.includes('语音包不参与 SurfCore 的「检查更新」'), '语音页必须说明手动重新导入');
 
 console.log('✅ test-updates-voice 通过');

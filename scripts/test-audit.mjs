@@ -165,6 +165,10 @@ const tests = [
   // 语音三闸门 + 配置双写（2026-10-29 复盘）：工具常注册、拒绝带 code/hint、保存带戳防覆盖。
   // 安装清单只能含 git 跟踪文件（2026-10-30：脏清单导致 zip 更新 100% 失败）。
   // 语音失败分类/换路/自检接线（2026-10-30 P0+P1）。
+  // 白名单归一化 + 启动补唤醒（2026-10-31 主人私信被忽略 / 积压不唤醒）。
+  // 称呼按人归属（2026-10-31 主人被叫成对象的称呼）。
+  'test-callname.mjs',
+  'test-allowlist.mjs',
   'test-voice-diagnostics.mjs',
   'test-release-manifest.mjs',
   'test-voice-gates.mjs',
@@ -172,6 +176,18 @@ const tests = [
   'test-update-version-fallback.mjs',
   // 版本号单一真相：根/插件 package.json 一致、无硬编码、CHANGELOG 有当前版本。
   'test-version.mjs',
+  // 插件冲突体检：已知第三方工具是否被 QQ 策略拒绝、压缩接管冲突、未知插件必须标 unknown。
+  'test-plugin-compat.mjs',
+  // 闸门事件中心 + 单轮止血：L0-L3 分级、去重/确认、步数/重复错误/预算熔断。
+  'test-gate-events.mjs',
+  // SnowLuma 断线/发送失败暂停：主动唤醒不得创建 DSH 会话（零 token）。
+  'test-snowluma-channel-gate.mjs',
+  // 一键启动/停止接线：QQ/B站/桌宠/语音多选、语音本地/云端分支、结构化失败。
+  'test-launch-components.mjs',
+  // 人格卡分层：核心/场景/日常、QQ群聊/私聊、预算裁剪、v1/v2 小节过滤。
+  'test-persona-layers.mjs',
+  // Phase 0A：遥测只读、模型调用去重、工具结果大小、报告聚合。
+  'test-context-telemetry.mjs',
   // B站分享去重：新鲜池空时不得回退旧素材（2026-10-26 修复的"同一条反复发"）。
   'test-bili-share-dedup.mjs',
 ];

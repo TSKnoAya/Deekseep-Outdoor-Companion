@@ -4,6 +4,130 @@
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 发布规则见 [docs/guides/VERSIONS.md](docs/guides/VERSIONS.md)。
 
+## [0.7.23] - 2026-10-31
+
+### 新增（Phase 0A：上下文/成本遥测，只测量）
+
+- 新增 `src/context-telemetry.js`：旁路记录唤醒、模型调用 usage、工具结果字符数/耗时、
+  turn 起止；只记长度/数量/错误码，不记消息正文或工具参数；
+- 插件通过 `ctx.on('session/event')` 采集所有会话；bridge 在真正投递 wake 时记录
+  prompt 总字符与分段字符；
+- 新增 `scripts/context-telemetry-report.mjs`：按唤醒原因/工具聚合基线，并标出
+  observed / estimated / 覆盖缺口；
+- 不改 prompt、工具可见性、会话策略、turn-guard 阈值；写入失败不影响主链路。
+
+### 新增（人格卡分层）
+
+- `persona.md` 保留为人格核心；新增可选 `persona.daily.md` 和
+  `persona.scenes/{qq-group,qq-private,bili,pet}.md`；
+- 组合顺序：核心→场景→日常；QQ 群聊/私聊按会话自动选场景，B站/桌宠各用各的；
+- 超总预算先裁日常、再裁场景，核心优先保留；
+- 角色页「人格卡」改为三层手动编辑，顶部醒目说明本次改动；模型不会自动改写；
+- `/persona` 支持逐层读写与按层备份恢复；快照/回档带三层；
+- 旧角色没有日常/场景文件时行为与旧版一致。
+
+
+## [Unreleased]
+
+### 修复（明明连着 SnowLuma 仍弹「发送通道断开」，且每次打开设置页都弹）
+
+- `close` 加 **15 秒观察窗口**：瞬时断开（1006 抖动/启动）在窗口内重连成功就不记 L2；
+- 恢复（`open`）时 `gateEvents.ackByDedupe('snowluma:send-channel-down')` **自动确认旧告警**，
+  不再每次打开设置页都弹同一个 L2；
+- 文案从“自动唤醒已暂停”改为“通道恢复前会自动跳过主动唤醒”（暂停由连续发送失败触发）；
+- 设置页加载提醒时，若当前 SnowLuma 已连接，过滤并自动确认旧的 `send-channel-down`；
+  概览未就绪时先不弹，避免误弹一次。
+
+## [0.7.22] - 2026-10-31
+
+### 修复（主人被叫成对象的称呼：称呼没有按人归属）
+
+- 新增 `src/callname.js`：按当前对话的 QQ 号从对齐表取称呼，私聊提示注入
+  「当前对话对象希望被叫「X」；不要套到别人身上」；群聊仍走身份对齐块；
+- 记忆卡：非主人的记录渲染成 `说话人（私聊/群聊）：内容`，并补规则
+  「名字/称呼只属于说这句话的人，当前对话对象看发送者 QQ 号」。
+
+### 修复（主人私信被忽略 / 重启后积压不唤醒 / 白名单被覆盖）
+
+- **白名单收敛**：新增 `src/allowlist.js`（去机器人自己、确保主人在私聊白名单、去重、丢弃非法值）；
+  桥接启动/登录/DSH 就绪时自愈并落盘 + 发 L1 事件；`/api/whitelist`、`install-apply`、
+  一键安装、设置页保存全部共用这套归一化，**不再用 `[owner]` 整体替换**；
+- **启动补唤醒**：reserved2 + DSH 就绪后 12 秒，挑允许范围内有 `unread` 且无待发定时器的会话补唤醒
+  （新 reason `backlog`，最多 5 个、按未读降序），桥接重启不再丢积压消息；
+- **token-guard**：day 拦截带 `retryAfterMs`（到本地零点），重试定时器可启动；direct（@/名字/提问/拍一拍）
+  默认豁免每日自动唤醒次数（`directBypassDay`）；桥接对 day 的重试间隔放宽到 10 分钟；
+- **日志节流**：未授权会话、token-guard 跳过日志 10 分钟只记一次，减少刷屏。
+
+
+## [0.7.21] - 2026-10-31
+
+### 新增（一键启动 SurfCore + 一键停止）
+
+- 概览启动按钮改为「一键启动 SurfCore」：多选 QQ（含 SnowLuma）/ B站 / 桌宠 / 语音；
+- 语音加本地/云端单选（voice-local / voice-cloud），未安装的选项标“未安装”；
+- 新增「一键停止（全部）」：语音→QQ→B站→桌宠；QQ 停止不关闭 SnowLuma 本体；
+- 每项独立返回 ok/code/error/hint，界面逐项显示成功/失败/建议；`overview.launch` 统一状态，
+  QQ/B站/桌宠/语音页读同一后端；
+- 空选择、平台开关关闭、桥接未运行、语音包未安装等都有结构化错误与下一步。
+
+
+## [0.7.20] - 2026-10-31
+
+### 修复（SnowLuma 断线时主动唤醒空烧 token）
+
+- `sendWakePromptV2` 最前面加 QQ 发送通道闸门：SnowLuma WS 未连接/最近发送失败 →
+  **不创建 DSH 会话、不投 prompt、不跑模型**，日志只写一次/10 分钟；
+- `sendToQQ` / `onebotSend` 记录成功/失败；连续 3 次失败 → 该会话自动唤醒暂停 30 分钟，
+  `scheduleProactiveCheckV2` 不再排下一次；
+- SnowLuma `close` 发 L2 `send-channel-down`，`open` 发 L1 恢复；首次发送失败 L1；
+- UI SnowLuma 安装卡显示断线原因和下一步；事件中心弹窗给“启动/重启 SnowLuma，
+  确认 3000/3001”的建议；
+- 未做首次 HTTP 失败预知、`wasted` 精确金额、端口/进程体检。
+
+### 修复（语音包被误放进 zip 自动更新）
+
+- 语音包（本地/云端）从 `updates.components()` 移除：它是离线运行时/模型/vendor 包，
+  不是代码 zip；通用 `updateFromZip` 的 `surfcore-*` + `package.json` + 安装清单规则必然失败；
+- 语音页新增说明：语音包不参与「检查更新」，需要新版本时用「重新导入离线包」，
+  导入保留 config.toml / .venv / models / vendor；
+- 未做语音包自动版本检查/通知；以后另做独立手动更新通道。
+
+
+## [0.7.19] - 2026-10-30
+
+### 新增（插件冲突体检）
+
+- 设置 → 概览「检查更新」旁新增「插件体检」：只读扫描 profile 的 bundles / `cordis.patch.yml` /
+  已安装包 / 已知第三方插件 / SurfCore QQ 工具策略；
+- 优先发现：第三方工具被 QQ guard 拒绝（例如本地执行类工具；`billion-context` 的 5 个上下文工具本版已放行）、
+  第三方接管压缩但 `compaction-basic auto=false`、插件未声明工具清单（`unknown`）；
+- 报告带等级、证据、影响、建议、覆盖范围与未检查项，可复制 JSON；
+- 不启动/停止服务、不改白名单、不禁用插件；未知插件明确标 `unknown`，不冒充“兼容”。
+
+### 新增（闸门事件中心 + 单轮 L3 止血）
+
+- `src/gate-events.js`：L0–L3 统一分级、去重 ack、脱敏、2MB 轮转；
+- `src/turn-guard.js` + bridge `guardTurnEvent`：单轮工具步数 40、同一 tool+error 3 次、
+  回合内每日额度耗尽 → **cancel-only** 停止 + 直接 QQ 通知，不再等模型自己放弃；
+- 设置 → 概览新增「安全提醒」卡片；L2/L3 弹窗，确认后不重复弹；
+- 插件 `/gate-events` 读写；兼容性体检的 blocker/high 自动进事件中心；
+- **未做**单轮费用上限（价格表未覆盖全部模型）、pre-call 阻断、L0/L1 全量生产者接入。
+
+### 变更（QQ 工具白名单）
+
+- 放行 `billion-context` 注入的 5 个上下文工具：`compress` / `decompress` / `search_context` /
+  `acp_status` / `acp_cache`。不放行时模型会反复重试被拒工具（实测单回合 197 次），
+  而 QQ 会话失去上下文压缩更容易爆上下文；这 5 个只操作上下文，不含本地执行/网络写操作。
+
+
+## 计划
+
+- 把 SurfCore 打成 npm 包 + DSH bundle，支持 `dsh plugin add` 一条命令安装
+- 语音包的"离线音频转音频"（RVC）接口
+- 更新面板显示远端版本号（目前只有提交数/版本清单）
+- 插件冲突体检 P1：端口/进程归属、运行时工具拒绝/重复回复、回合熔断
+
+
 ## [0.7.18] - 2026-10-30
 
 ### 新增（B站 扫码登录可见/可核查；管理员 UID 支持长号）
@@ -914,14 +1038,6 @@
 - **关掉 B站 后分享定时器仍在跑**：分享调度只在桥接启动时读 `biliBridge.enabled`，设置页的
   「启动B站」关不掉它；现在每次触发前按 30 秒缓存读统一配置的 `platforms.start.bili`。
 - **分享历史写失败被静默吞掉**：`saveHistory()` 的 `catch {}` 改为打日志——写不进去会让去重永久失效。
-
-## [Unreleased]
-
-### 计划
-
-- 把 SurfCore 打成 npm 包 + DSH bundle，支持 `dsh plugin add` 一条命令安装
-- 语音包的"离线音频转音频"（RVC）接口
-- 更新面板显示远端版本号（目前只有提交数/版本清单）
 
 ## [0.1.0] - 2026-10-26
 

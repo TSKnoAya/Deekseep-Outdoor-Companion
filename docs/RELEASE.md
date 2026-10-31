@@ -28,6 +28,7 @@
 | 1 | 清单由 git blob 生成 | `node scripts/release-manifest.mjs` | 工作区干净；输出 `source=git HEAD` |
 | 2 | 清单与提交逐字节一致 | `node scripts/release-manifest.mjs --verify-ref HEAD` | `问题 0 个` |
 | 3 | 发布物与清单一致 | 下载 tag 归档 → `node scripts/release-manifest.mjs --verify <dir>` | `不符 0 / 缺失 0` |
+| 3b | 归档下载不可达时的备用核对 | `GH_TOKEN=... node scripts/verify-remote-manifest.mjs <repo> vX.Y.Z` | `一致 504 / 不符 0 / 缺失 0` |
 
 **发布脚本纪律**：`scripts/publish-via-api.mjs` 必须用 `git show HEAD:<path>` 取内容上传；
 禁止读工作区文件（Windows CRLF → 远端仓库 CRLF → 校验必失败）。
@@ -46,7 +47,7 @@ cd D:\deepseekwork\surfcore
 git status --porcelain          # 必须干净，或有明确列出的待发文件
 git log --oneline -5            # 确认最近提交都是要发的
 node -e "console.log(require('./package.json').version)"   # 当前版本
-npm run test:audit              # 必须全绿（当前 83/83；新增/删除测试后同步这个数）
+npm run test:audit              # 必须全绿（当前 94/94；新增/删除测试后同步这个数）
 cd plugins/surfcore && npm test # 必须 0 失败
 ```
 

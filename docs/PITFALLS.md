@@ -2886,6 +2886,190 @@ Node 读文件后删除；不再解析 stdout。所有「浏览…」共用此�
 - **修法**（0.7.18）：放宽到 4~20 位；非法值返回 `admin.mid-invalid` + hint；输入框提示位数；
   另加「核查 UID 与昵称」（查 B站 名片比对真实昵称）。
 
+## #88（2026-10-30）第三方全局工具被 QQ 白名单拒 → 模型反复重试
+
+**现象**：用户装了第三方 `billion-context`（0.1.209），它把
+`compress/decompress/search_context/acp_status/acp_cache` 注入 DSH 全局工具层；
+QQ 会话的 `qq-tool-restrict` 不认识这些工具，执行期拒绝。模型把拒绝当普通工具错误，
+197 次 compress / 214 步 / 46 分钟，约 ¥20。
+
+**根因**：
+1. SurfCore 的工具有效边界是 `qq-tool-restrict` 的精确白名单，第三方插件没有统一的工具声明；
+2. 工具被拒只返回字符串，没有“停止/熔断”语义；
+3. 每日 token 额度只在唤醒前检查，回合内不生效；
+4. `billion-context` 同时把 DSH `compaction-basic` 的 `auto` 关掉，QQ 会话失去两套压缩。
+
+**修法（本批）**：新增只读「插件冲突体检」，优先覆盖：
+`COMPAT_TOOL_DENIED` / `COMPAT_COMPACTION_CONFLICT` / `COMPAT_TOOL_INVENTORY_UNKNOWN`；
+未知插件必须显示 `unknown`，不能冒充已检查。入口在设置→概览「检查更新」旁。
+
+**未修（下一批）**：回合级熔断（重复错误/步数/单轮费用/回合内额度）与端口/进程检查；
+本次体检只能提前发现，不能替代运行时止损。
+
+**验证**：`node scripts/test-plugin-compat.mjs`；`npm run test:audit`。
+
+## #89（2026-10-30）每日额度管不住正在跑的回合 → 工具拒绝循环烧钱
+
+**现象**：`compress` 被 QQ 白名单拒，模型在同一个 turn 里试了 197 次；
+每日 token 额度只在唤醒前检查，回合开始后没有任何步数/重复错误/额度硬闸。
+
+**根因**：
+1. `tokenGuardWakeBlock` 只在唤醒前检查 `evaluateBudget`；send guard 只查防爆破；
+2. `qq-tool-restrict` 的拒绝只是普通工具错误，没有“停止”语义；
+3. bridge 的 `trackTurnEvent` 只收最终文本，不计数；
+4. 没有 cancel-only 接口用于“只止血、不清队列”。
+
+**修法**：
+- `src/turn-guard.js`：maxSteps 40 / 同 tool+error 3 次 / 回合内额度；
+- `bridge.pumpMux` 接 `guardTurnEvent`，命中后 `api.cancelTurn()` + 直接 QQ 通知；
+- `src/gate-events.js`：L0–L3 事件中心、去重 ack、2MB 轮转；
+- 插件 `/gate-events` + 概览「安全提醒」卡/L2/L3 弹窗。
+
+**未修**：单轮费用上限（价格表覆盖不全）、pre-call 阻断、L0/L1 全量生产者接入。
+
+**验证**：`node scripts/test-gate-events.mjs`；`npm run test:audit` 88/88；
+`plugins/surfcore npm test`。
+
+## #90（2026-10-30）SnowLuma 断线，主动唤醒仍跑完整 LLM 空烧
+
+**现象**：SnowLuma 未启动/掉线时，`proactiveCheck` 仍创建会话、跑完整模型、最后发送失败；
+失败只写 bridge.log，每 40–90 分钟重复，用户无感知。
+
+**根因**：
+1. `sendWakePromptV2` 的 guard 只查 socialV2 开关/暂停/鱼群/token/繁忙/限频；
+2. 没有检查 `snowlumaHealth.connected` / 最近发送失败；
+3. 发送失败只记 `lastSendFailed`，没有跨回合失败计数/挂起；
+4. 失败消耗没有 UI/事件，只有日志。
+
+**修法**：
+- `sendWakePromptV2` 最前面 `qqSendChannelStatus()`：WS 未连接或最近发送失败 → return，
+  不 `ensureSession`、不投 prompt；
+- `sendToQQ` / `onebotSend` 记录成功/失败；连续 3 次失败把会话 `wakeSuspendedUntil`
+  写进 `social-v2.json`，`scheduleProactiveCheckV2` 暂停排期；
+- SnowLuma `close` 写 L2 `send-channel-down`，`open` 写 L1 恢复；`send-failed` 首次 L1；
+- UI SnowLuma 安装卡显示 `diagnosis.hint`；事件中心弹窗给“启动/重启 SnowLuma，
+  确认 3000/3001”的建议。
+
+**未做**：首次 HTTP 失败的预知、`wasted` 精确金额标记、端口/进程体检。
+
+**验证**：`node scripts/test-snowluma-channel-gate.mjs`（断开/暂停不创建 DSH 会话，
+恢复后创建）；`npm run test:audit` 89/89。
+
+## #91（2026-10-30）语音包被塞进 zip 自动更新 → 永远无法自动更新
+
+**现象**：语音包（surfvoicelocal / surfvoicecloud）在更新面板显示有更新，点更新下载后失败
+`verify.bad-archive`；用户以为“补 package.json 就能修”。
+
+**根因**：
+- `updates.components()` 把语音包登记成 `kind:auto`，走通用 `updateFromZip()`；
+- 该方法硬编码 `surfcore-*` 根目录 + `package.json` + `release/install-manifest.json`；
+- 语音包只有 `version.json` / `models.json` / `config.example.toml`，是离线运行时/模型/vendor 包；
+- 只补 `package.json` 仍过不了根目录、清单、配置保留三关。
+
+**修法**：语音包从自动更新列表移除；语音页明确“不参与检查更新，需要新版本时用
+重新导入离线包”，导入事务保留 config/venv/models/vendor。
+
+**未做**：语音包自动版本检查/通知；需要时另做独立手动更新通道，不复用 `updateFromZip`。
+
+**验证**：`plugins/surfcore npm test`（test-updates-voice 钉住不再登记 surfvoice 组件 +
+语音页说明）；`npm run test:audit` 89/89。
+
+## #92（2026-10-31）一键启动只覆盖 QQ/B站，桌宠/语音各自为政，且没有一键停止
+
+**现象**：概览「一键启动」只拉 QQ/B站；桌宠/语音要去各自页启动；没有统一停止；
+切换页面时状态来源分散，用户不确定“到底启没启”。
+
+**根因**：
+- `start-all` 只处理 `platforms.start.{qq,bili}`，桌宠/语音不在同一编排里；
+- 语音启动依赖 QQ 桥接，但没有明确依赖报错；
+- 没有 `stop-selected`；停止顺序也没有考虑“语音由桥接托管”。
+
+**修法**：
+- 概览改为多选 `QQ（含 SnowLuma）/ B站 / 桌宠 / 语音`，语音加本地/云端单选；
+- `start-selected` / `stop-selected` 每项返回 `ok/code/error/hint`；
+- `overview.launch` 统一 `bridgeStatus / schedulerStatus / petService / /api/voice/packs`；
+- 停止顺序：语音→QQ→B站→桌宠；QQ 停止不关闭 SnowLuma 本体；
+- 失败行 + toast + `lastError` 状态行，不静默。
+
+**未做**：真实进程启停手测、语音页深链、SnowLuma 本体停止（设计边界）。
+
+**验证**：`plugins/surfcore/scripts/test-platform-start-host.mjs`（结构化失败/空选择/停止幂等）、
+`test-client-contract.mjs`（按钮/多选/语音分支）；`npm run test:audit` 90/90。
+
+## 白名单多写入点 / 重启后积压不唤醒
+
+- **现象**：`allow.private` 只剩机器人自己的号 → 主人私信被忽略；桥接重启后白名单群 `unread>0` 但没人唤醒；
+  安装/诊断后用户加的白名单丢失。
+- **根因**：白名单 3 个写入点各自拼数组（`[owner]` 整体替换）；唤醒只由新消息事件触发；
+  token-guard day 拦截没有 `retryAfterMs`，重试定时器不启动。
+- **修法**（0.7.22）：`src/allowlist.js` 统一归一化（去自己、补主人、去重）+ 启动/登录/就绪自愈；
+  四个写入点共用；reserved2 就绪后补唤醒积压（最多 5 个）；day 带 `retryAfterMs`、direct 豁免；
+  未授权/token 日志 10 分钟节流。
+- **教训**：同一配置的写入点必须共用一个归一化函数；重启恢复是生命周期步骤，不能等事件触发。
+
+## 称呼/名字记忆没有按人归属
+
+- **现象**：主人被叫成别人（对象）的称呼；私聊里叫错人。
+- **根因**：对齐表的称呼只在群聊注入；记忆卡里非主人的私聊记录不带说话人。
+- **修法**（0.7.22）：`src/callname.js` 按当前 QQ 取称呼并只注入当前会话；
+  记忆行渲染成 `说话人（私聊/群聊）：内容`，并补"称呼只属于原话的人"规则。
+- **教训**：跨会话共享的记忆必须带归属（谁说的、哪个场景），否则 A 的偏好会套到 B 身上。
+
+## #93（2026-10-31）人格卡只有一张，日常/场景混在一起，改一点就把缓存前缀打掉
+
+**现象**：人格卡 `persona.md` 一整张注入 QQ/B站/桌宠；想改近期状态只能改整张，
+B站/桌宠被迫读 QQ 规则；核心和日常没有边界。
+
+**根因**：
+- 角色系统只有单 `persona.md`，`role.maxInjectChars` 只做总长度截断；
+- 没有平台/群聊/私聊场景文件；
+- 日常变化会改整段系统提示，缓存从变化点失效。
+
+**修法**：
+- `persona.md` 保持人格核心；新增可选 `persona.daily.md` 与
+  `persona.scenes/{qq-group,qq-private,bili,pet}.md`；
+- `src/persona-layers.js` 统一组合：核心→场景→日常，超预算先裁日常/场景；
+- QQ 按 `group:`/`private:` 选场景；B站/桌宠各读自己的场景；
+- `/persona` 三层读写，客户端逐层手动编辑 + 醒目说明；不做自动改写；
+- 快照/回档带三层；旧角色没有新文件时行为不变。
+
+**未做**：日常自动生成、任务型 ContextRecipe、记忆分层、缓存收益实测。
+
+**验证**：`test-persona-layers`（组合/预算/平台/v1v2/接线）、
+`test-character-api`（三层读写/未知场景/快照回档）、`test-client-contract`（分层 UI）；
+`npm run test:audit` 93/93。
+
+## #94（2026-10-31）只有总 token，没有逐唤醒/逐工具账单，无法判断钱花在哪
+
+**现象**：token 账本只有「QQ/B站/其他 + 当日总量」，能看到今天花了多少，
+但回答不了：哪类唤醒最多、哪一步开始膨胀、哪个工具反复查、工具结果多大。
+
+**根因**：
+- token ledger 只折叠 provider usage；
+- 工具调用/结果只在 `tool-calls.jsonl` 有日志，没有和模型调用/唤醒关联；
+- prompt 组成没有分段统计。
+
+**修法（Phase 0A）**：
+- 新增 `src/context-telemetry.js`：旁路 JSONL，只记录长度/usage/工具名/错误码，不记正文；
+- 插件 `session/event` 采所有会话的 turn/model/tool 事件；
+- bridge 在真正投递 wake 时记录 prompt 总字符与分段字符；
+- `scripts/context-telemetry-report.mjs` 输出按唤醒原因/工具聚合的基线；
+- observed / estimated / coveragePct 明确标注，不把字符数冒充 token。
+
+**不做**：不改 prompt、工具、guard、会话策略；不改 token 账本。
+
+**验证**：`test-context-telemetry.mjs`（去重/工具大小/不记正文/写失败不抛/接线）、
+`npm run test:audit` 94/94。
+
+## SnowLuma 明明连着却弹「发送通道断开」，且每次打开设置页都弹
+
+- **现象**：WS 正常、能收发，但概览弹 L2 send-channel-down（code=1006）；打开设置页反复弹。
+- **根因**：`close` 立刻记 L2（1006 多为瞬时抖动）；恢复（open）只记 L1，不确认旧 L2；
+  UI 每轮取未确认事件 → 一直弹；文案还误称“自动唤醒已暂停”。
+- **修法**（0.7.23）：close 加 15 秒去抖窗口；open 时 `ackByDedupe` 自动确认旧断线事件；
+  文案改为“恢复前跳过主动唤醒”；UI 在 connected=true 时过滤并自动确认旧事件。
+- **教训**：断线是事件、不可用是状态；告警要看状态并带去抖，恢复要结掉旧事件。
+
 ## 测试“通过”了，其实是被判 cancelled
 
 - **现象**：`node test/run-all.js` 汇总 `tests 85 / pass 81 / fail 0`——**fail 是 0**，看着像全绿，
@@ -2936,3 +3120,101 @@ Node 读文件后删除；不再解析 stdout。所有「浏览…」共用此�
 - **教训**：**"改写了用户消息"的功能，会污染一切下游的"从消息里提取信息"的逻辑**
   （标题、摘要、统计）。注入前缀时要留下可识别的边界（我们用 `\n\n---\n\n`），
   并把这个边界当成契约写进读取端。
+
+## `"type": "module"` 里的 UMD 库：`.js` 后缀等于没有导出
+
+- **现象**：`import qrcode from './vendor/qrcode-generator.js'` 报
+  `SyntaxError: The requested module ... does not provide an export named 'default'`，
+  但该库明明支持 CommonJS（`module.exports = …`）。
+- **根因**：包 `package.json` 有 `"type": "module"`，`.js` 一律按 ESM 解析。
+  UMD 的判定是 `typeof exports === 'object'`，在 ESM 里 `exports` 不存在 → 两个分支都不进 → 零导出。
+- **修法**：vendor 文件用 `.cjs` 后缀（`src/vendor/qrcode-generator.cjs`）。
+- **预防**：往 ESM 包里塞第三方单文件前，先看它有没有 `module.exports`；有就直接改后缀。
+
+## 二维码永远扫不到：Y 平面 rowStride + 传感器旋转
+
+- **现象**：CameraX 每帧都送进 ZXing，始终 `NotFoundException`，屏幕上二维码清清楚楚。
+- **根因**（两个叠加）：
+  1. `ImageProxy.image.planes[0]` 的 `rowStride` 常大于宽度（内存对齐填充），
+     按 `width` 逐行直读会把整帧斜切；
+  2. 传感器默认横向输出，竖屏预览下 `rotationDegrees=90`，未转正的矩阵对 QR 检测是「歪的」。
+- **修法**：按 `rowStride` 读满一行、按 `pixelStride` 取样；按 `rotationDegrees` 旋转 90/180/270
+  再 `PlanarYUVLuminanceSource`。见 `ui/QrScanScreen.kt` 的 `QrCopyLuminance` + `rotateClockwise`。
+- **验证**：不旋转时 100% 解不出、旋转后立刻出结果（真机/视频帧都复现过这一组对照）。
+
+## 国行机别用 Google 扫码页
+
+- **现象**：`GmsBarcodeScanner` / `GmsBarcodeScanning.getClient()` 在红米 K80 上要么直接报
+  「Google Play 服务不可用」，要么点了没反应。
+- **根因**：国行 HyperOS 不带 GMS。
+- **修法**：用 ZXing core（纯 Java，随 APK 分发）+ CameraX 自己画取景框。
+  ML Kit 的 bundled 版本能离线，但要再带 ~2.4MB Google 依赖，不划算。
+
+## DSH 插件里 spawn：`process.execPath` 是 Electron，不是 node
+
+- **现象**：插件里 `spawn(process.execPath, ['src/main.js'])` 起的不是 node，
+  进程秒退或弹出一个空的应用窗口，日志里只有 Electron 的报错。
+- **根因**：DSH 主进程本身是 `DeepSeek Harness.exe`（Electron），`execPath` 指向它；
+  把 JS 路径当第一个参数传过去，Electron 会按应用参数解析。
+- **修法**：优先用 DSH 自带的 node：
+  `process.resourcesPath/runtime/primary-runtime/dependencies/node/bin/node.exe`，
+  其次 `%LOCALAPPDATA%\Programs\DeepSeek Harness\...`、`%ProgramFiles%\nodejs`，
+  最后才 `execPath` + `ELECTRON_RUN_AS_NODE=1`。顺序与 start-gateway.bat 保持一致，
+  否则会出现「bat 能起、按钮起不来」。
+- **判据**：在插件里 `node -e "console.log(process.execPath)"` 看结果是不是 `.exe` 里的
+  `DeepSeek Harness.exe`。
+
+## Windows 杀子进程：`child.kill()` 留下它 spawn 的 DSH/ACP
+
+- **现象**：设置页点「停止网关」后端口没了，但任务管理器里还挂着一个
+  `DeepSeek Harness.exe`（ACP 子进程），继续吃内存；再点启动会叠出新的。
+- **根因**：网关会 spawn `DeepSeek Harness.exe --profile acp` 作为子进程；
+  Windows 上 `kill()` 只结束直接子进程，不会级联。
+- **修法**：用 `taskkill /pid <pid> /T /F` 杀整棵树（`/T` = tree）。
+  非 Windows 用 SIGTERM 即可。
+- **预防**：凡是「服务进程再 spawn 一个运行时长进程」的结构，停止逻辑都按进程树设计，
+  否则会静默积累孤儿进程（最坏表现为模型免费额度被多个 ACP 同时消耗）。
+
+## 插件前端热更新了、宿主没热更新 → 点新按钮返回 HTTP 405
+
+- **现象**：设置页出现了新按钮（说明新的 `client.js` 已被加载），但点下去返回 `HTTP 405`，
+  随后状态卡退回旧文案。
+- **根因**：DSH 的**设置页前端**每次打开都重新取 `client.js`；而**插件宿主**
+  （`lib/index.js`，跑在 DSH 主进程里）只在 DSH 启动时加载一次。
+  两边版本不一致时，前端请求一个宿主根本没注册的路由，DSH web 层按「方法不允许」回 405。
+- **判据**：对比 DSH 进程启动时间与插件文件 mtime：
+  `Get-Process | ? ProcessName -like '*DeepSeek*' | select Id,StartTime`。
+  DSH 启动时间早于文件修改时间 = 宿主是旧的。
+- **处置**：**完全退出 DSH 再打开**（托盘图标 → 退出），不是只关窗口。
+- **预防**：凡是「新增接口 + 新增按钮」的改动，都需要重启 DSH；
+  前端对这种 405 要给「宿主是旧版」的明确提示，别让用户以为网关坏了。
+
+## 扫码页一看相机就报「The coroutine scope left the composition」
+
+- **现象**：手机点「扫码配对」，界面显示 `相机打不开：The coroutine scope left the composition`，
+  但相机没被占用、权限也给了。
+- **根因**：这是 **Compose 的取消异常**（`LeftCompositionCancellationException`），
+  由 `LaunchedEffect` 被重组取消时抛出，不是相机错误。触发链：
+  1. `LaunchedEffect(previewView, key)` 把「工厂里写入的状态」当 key；
+  2. effect 启动时（apply 阶段）读到的 `previewView` 已经是新值，于是真的开始绑定相机；
+  3. 状态写入引发重组，key 从 null 变成 PreviewView → 旧 effect 被取消 → 抛取消异常；
+  4. 外面 `catch (e: Exception)` 把取消异常当业务错误显示出来。
+- **修法**：
+  - PreviewView 用 `AtomicReference`（非 Compose 状态）持有，key 只用重试计数；
+  - `catch (e: CancellationException) { throw e }` 放在通用 catch 之前；
+  - 真异常 `Log.e("QrScanScreen", "camera bind failed", e)`，便于 logcat 抓栈。
+- **教训**：**取消不是失败**。`catch (Exception)` 会吞掉 `CancellationException`，
+  把它渲染成面向用户的错误；凡是跨挂起点的 try/catch 都要先放行取消异常。
+
+## DSH 插件：同一路径注册两次，只剩一个方法 → 点按钮「方法不对」（405）
+
+- **现象**：设置页里 GET 正常（状态能读出来），点「开启」/「保存」却红字「方法不对」。
+  `方法不对` 是插件自己的 405 文案，不是网关的。
+- **根因**：DSH 的 `ctx.webServer.register({ kind:'exact', path, handler })` **按路径**建路由；
+  同一个 `path` 注册两次（先 GET 一次、再 PUT 一次）时只会保留一个，另一个方法永远走不到。
+  插件里 `/api/persona`、`/api/acp-model` 都是「GET+PUT 两条 route() 调用」，正好中招。
+- **判据**：同路径只有一个方法能用、另一个稳定 405，且网关日志里没有任何请求 —— 请求根本没到网关。
+- **修法**：**一个路径只 register 一次**，handler 内部按 `req.method` 分发
+  （见 `dsh-plugin/lib/index.js` 的 `byPath` 表）。
+- **预防**：需要多方法时先想「这库是不是按路径去重」；写个假 ctx 做注册计数测试
+  （`test/plugin-routes.test.js` 就是拿「后注册覆盖前注册」的语义钉住的）。
