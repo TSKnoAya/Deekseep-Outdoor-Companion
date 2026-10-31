@@ -62,6 +62,13 @@ dependencies {
     // EncryptedSharedPreferences：设备令牌加密存（密钥在 Android Keystore）
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
 
+    // 扫码配对。ZXing core 是纯 Java 解码库，不依赖 Google Play 服务（国行机没有 GMS）
+    implementation("androidx.camera:camera-core:1.3.4")
+    implementation("androidx.camera:camera-camera2:1.3.4")
+    implementation("androidx.camera:camera-lifecycle:1.3.4")
+    implementation("androidx.camera:camera-view:1.3.4")
+    implementation("com.google.zxing:core:3.5.3")
+
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
 }

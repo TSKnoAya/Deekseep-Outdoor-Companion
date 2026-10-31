@@ -15,6 +15,7 @@ import http from 'node:http';
 import { CODES, fail, toFailure, ok, requireThat } from './errors.js';
 import { ANNOUNCE_MODES } from './voice/announce.js';
 import { loadAcpModel, saveAcpModel } from './acp-model.js';
+import { makePairQr } from './pair-qr.js';
 
 const MAX_JSON_BODY = 4 * 1024 * 1024; // 4MB；音频走专门的 /v1/asr 且单独限长
 const MAX_AUDIO_BODY = 24 * 1024 * 1024;
@@ -182,9 +183,45 @@ export function createGatewayServer(deps) {
     );
   }
 
-  /** 生成配对码：给「换手机 / 重装 App」用，不用去重启网关窗口。 */
+  /**
+   * 生成配对码（给「换手机 / 重装 App」用，不用去重启网关窗口）。
+   *
+   * 同时带上每个可达地址的二维码：手机扫一次就拿到「地址 + 码」，
+   * 省掉在电脑屏幕和手机键盘之间抄两遍（抄错只会报「连不上」，很难查）。
+   * 二维码生成失败不拖累手动配对——码照发，另给结构化警告。
+   */
   function handleAdminPair(req, res) {
-    sendJson(res, ok(deps.devices.issuePairCode()));
+    const pair = deps.devices.issuePairCode();
+    const addresses = deps.admin?.addresses?.() ?? { loopbackOnly: true, list: [] };
+    const list = Array.isArray(addresses.list) ? addresses.list : [];
+    const urls = [];
+    let warn = null;
+    for (const a of list) {
+      try {
+        const { payload, qr } = makePairQr({ url: a.url, code: pair.code });
+        urls.push({ ...a, payload, qr });
+      } catch (e) {
+        warn = {
+          code: 'pair.qr-failed',
+          error: `二维码生成失败：${e?.message ?? e}`,
+          hint: '配对码仍然有效：在手机 App 里手动填地址和这 6 位码就行。',
+        };
+      }
+    }
+    if (list.length === 0) {
+      warn = addresses.loopbackOnly
+        ? {
+            code: 'pair.loopback-only',
+            error: '网关只监听了回环地址（127.0.0.1），手机扫了也连不上。',
+            hint: '用 start-gateway.bat 启动（或加 --listen 0.0.0.0:8788）后重新生成；现在仍可手动配对到回环地址。',
+          }
+        : {
+            code: 'pair.no-lan-address',
+            error: '没检测到局域网地址，生成不了能用的二维码。',
+            hint: '先连上 Wi-Fi 或网线；也可以在手机 App 里手动填本机 IP:8788。',
+          };
+    }
+    sendJson(res, ok({ ...pair, urls, ...(warn ? { warn } : {}) }));
   }
 
   async function handleAdminReload(req, res) {
@@ -206,8 +243,13 @@ export function createGatewayServer(deps) {
   async function handleAdminPutPersona(req, res) {
     requireThat(Boolean(deps.fish), CODES.BAD_REQUEST, '这个网关版本没接角色上下文', {});
     const body = await readJson(req, MAX_JSON_BODY);
-    requireThat(typeof body.enabled === 'boolean', CODES.BAD_REQUEST, 'enabled 必须是 true/false', {});
-    deps.fish.setEnabled(body.enabled);
+    const hasEnabled = typeof body.enabled === 'boolean';
+    const hasCharacter = body.characterId === null || typeof body.characterId === 'string';
+    requireThat(hasEnabled || hasCharacter, CODES.BAD_REQUEST, 'enabled 或 characterId 至少要给一个', {
+      hint: 'characterId 传角色 id（见 GET 返回的 characters），null 表示跟随桌面当前角色。',
+    });
+    if (hasEnabled) deps.fish.setEnabled(body.enabled);
+    if (hasCharacter) deps.fish.setCharacter(body.characterId === '' ? null : body.characterId);
     sendJson(res, ok(deps.fish.status()));
   }
 

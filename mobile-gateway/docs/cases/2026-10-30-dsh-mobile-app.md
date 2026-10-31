@@ -1037,3 +1037,383 @@ ACP 的 `session/list` 只给 `{ sessionId, cwd }`，手机上就是一串 uuid�
   那是 P2 的升级版，等桌面侧稳定了再说。
 
 单测 161/161（新增 2 条：落盘回调、`persist:false` 只改内存）。
+
+## 20. 2026-10-31 19:10 扫码配对：把「地址 + 码」塞进一张二维码
+
+### 20.1 用户原话
+
+> 「保留现在的手动输入配对，额外增加扫码配对」
+
+### 20.2 链路
+
+```
+电脑 DSH 设置页（dsh-plugin/lib/client.js ②卡片）
+  → POST /dsh-mobile-gateway/api/pair（插件代理，仅本机）
+  → POST 127.0.0.1:8788/admin/pair（网关，仅回环）
+      → devices.issuePairCode()      一次性 6 位码，5 分钟 / 5 次
+      → admin.addresses()            本机真实 IPv4（含 Tailscale 段）
+      → src/pair-qr.js               dshmobile://pair?v=1&u=…&c=…
+                                     → qrMatrix()（vendor qrcode-generator，M 级，37×37）
+  → 返回 { code, expiresAt, urls:[{url, payload, qr:{size, rows}}], warn? }
+  → 设置页用内联 SVG 画出二维码（不加载任何外部资源）
+
+手机 DSH App 配对页
+  → 「扫码配对」→ ui/QrScanScreen.kt（CameraX 预览 + ZXing 解码）
+  → pair/PairPayload.kt 解析（与网关同一份格式）
+  → ChatViewModel.pairFromScan() → 现有 pair() → POST /v1/pair（手动配对同一条路）
+
+备选入口：系统相机/微信扫到 dshmobile://pair?... → 点链接 → MainActivity 深链 → 同一个 pairFromScan()
+（`autoPair=false`：只填字段，不自动连）
+```
+
+谁在读这些接口/文件（`grep` 结果）：
+
+| 对象 | 读者 |
+| --- | --- |
+| `POST /admin/pair` | `dsh-plugin/lib/index.js`（代理）+ `test/server.test.js` |
+| `src/pair-qr.js` | `src/server.js`、`test/pair-qr.test.js`、`test/server.test.js` |
+| 载荷格式 | 网关 `parsePairPayload`、Android `PairPayloadParser`（两处实现，必须同步改） |
+
+### 20.3 机制：为什么这样切
+
+1. **二维码内容不是「一个网址」，而是「地址 + 一次性码」**。
+   只放地址的话，用户还得再手输 6 位码——痛点没消失。码本身 5 分钟过期、只成功一次
+   （`devices.pair()` 用定长比较 + 限次），所以二维码泄了也只是一次可用的临时凭证。
+2. **网关只出矩阵，不出图片**。DSH 设置页是 web，`<img src="data:image/svg+xml,...">`
+   可能被 CSP 拦；把 37×37 的 `0/1` 矩阵交给前端画成内联 `<svg><path>`，
+   既不依赖外链，也不受深色主题影响（二维码必须有白底/黑码）。
+3. **编码库用 vendor 而不是自己写**。QR 编码（GF(256) 纠错、掩码、版本表）手写一处错就整张废掉，
+   而且没有解码器时根本看不出来。选用单文件 MIT 的 `qrcode-generator`（56KB），
+   并用 jsQR 独立解码验证过（见 20.7）。
+   ⚠️ 本包是 `"type": "module"`，该库是 UMD：**文件必须叫 `.cjs`**，改成 `.js`
+   Node 会当 ESM，`module.exports` 分支不执行，`import` 直接报「没有 default 导出」。
+4. **手机端不用 GMS / ML Kit**。国行红米 K80 没有 Google Play 服务，
+   `GmsBarcodeScanner` 那套扫码页打不开；ML Kit bundled 能离线但要再带 2.4MB Google 依赖。
+   ZXing core 是纯 Java（约 500KB），随 APK 走，不依赖系统服务。
+5. **解码链路有两个必踩的点**：
+   - `ImageProxy.image.planes[0]` 是 Y 平面，但 `rowStride` 通常大于宽度（有对齐填充），
+     按 `width` 直读会整帧歪斜 → 永远解不出；必须按 `rowStride` 读、按 `pixelStride` 取样。
+   - 传感器输出默认横向（`rotationDegrees=90`），竖屏时不旋转就永远扫不到 → 先转正再交给 ZXing。
+6. **深链只认 `dshmobile://pair`**：别的 scheme/host 一律忽略；解析失败时明确告诉用户
+   「这不是配对二维码」，不会拿乱码去当网关地址发请求。
+7. **深链不自动配对**：任何网页/别人发的链接都能写 `dshmobile://pair?...`，自动连过去等于
+   让别人替你选网关（可做成假主机骗你说话）。所以深链只把地址和码填进输入框，
+   由用户看清地址后自己点「配对」；App 内扫码是用户主动对准自己电脑，才自动配对。
+
+### 20.4 爆炸半径
+
+| 维度 | 情况 |
+| --- | --- |
+| 进程 | 3 个：DSH 主进程（设置页插件，web）、网关（Node）、手机 App |
+| 读者 | `/admin/pair` 2 个读者；载荷格式 2 份实现 |
+| 静默性 | 二维码画错/扫不出来 = 静默失败（扫码器没反馈）→ 用独立解码器验证 + 界面显式失败路径压到最低 |
+| 用户数据 | 不碰会话/记忆/令牌；二维码里只有一次性配对码（5 分钟、1 次），不落盘、不出本机 |
+| 权限 | App 新增 CAMERA（仅扫码页使用）；APK 17.9MB → 20.7MB（+2.8MB，CameraX + ZXing） |
+
+### 20.5 取舍（至少两条路）
+
+| 方案 | 收益 | 成本 / 风险 | 结论 |
+| --- | --- | --- | --- |
+| 插件侧直接 `require` 一个 QR 库 | 网关零改动 | DSH 的模块加载器不解析相对路径/裸包，装不进去；改 client.js 包结构风险大 | ❌ |
+| 网关返回 data URL 图片（SVG/PNG） | 前端一行 `<img>` | CSP 可能拦 data:；PNG 还要带编码器 | ❌ |
+| **网关出矩阵 + 前端内联 SVG** | 无 CSP、无外部资源、可测试 | 前端多 ~30 行画图 | ✅ |
+| 终端打印 ASCII 二维码 | 不依赖 DSH 设置页 | cmd 默认位图字体渲染不稳；插件页已够用 | ⏸ 未做 |
+| GMS Code Scanner / ML Kit | 代码最少 | 国行无 GMS；ML Kit 再 +2.4MB | ❌ |
+| **CameraX + ZXing core** | 无 GMS、离线、体积小 | 自己写 YUV/旋转（约 100 行） | ✅ |
+
+编码器：手写 vs vendor —— 选 vendor（正确性风险远大于 56KB 体积收益）；
+用 jsQR 独立解码验证，并在测试里钉住矩阵哈希。
+
+### 20.6 生效与重启
+
+| 改了什么 | 谁读 | 要重启什么 |
+| --- | --- | --- |
+| `src/pair-qr.js`、`src/server.js`、`src/vendor/*` | 网关进程 | **网关**（start-gateway.bat 那个窗口） |
+| `dsh-plugin/lib/client.js`、`lib/index.js` | DSH 设置页 | **DSH**（插件页面代码是启动时加载的） |
+| Android 代码/清单/依赖 | 手机 | 重新 `assembleDebug` + `adb install -r -d` |
+
+### 20.7 验证
+
+自动化：
+
+```bash
+# 网关 + 载荷/矩阵
+node test/run-all.js
+# → tests 171 / pass 171 / fail 0（新增 pair-qr 8 条 + server 2 条）
+
+# Android 解析器
+cd android && gradle testDebugUnitTest
+# → PairPayloadTest：tests=5 failures=0
+
+# APK
+gradle assembleDebug
+# → BUILD SUCCESSFUL；app-debug.apk 20,696,951 字节
+```
+
+独立解码验证（不依赖本项目代码判断对错）：
+
+- 用 jsQR 1.4.0 把 `qrMatrix()` 输出光栅化后解码 → 4 个纠错等级全部还原出同一载荷；
+- 用同样方法**复刻插件里的 `qrSvg()` 路径算法**（M/h/v 指令）再解码 → 通过
+  （370 段路径），说明「矩阵 → 内联 SVG」这一步没有坐标错位。
+
+未验证（老实写）：
+
+- 真机摄像头对准电脑屏幕的实际扫码成功率（需要人拿着手机扫，自动化做不到）；
+- HyperOS 系统相机/微信对 `dshmobile://` 深链的「打开 App」弹窗行为；
+- 设置页多地址（以太网 + Tailscale）切换的实际观感。
+
+### 20.8 失败路径（用户看到什么 + 下一步）
+
+| 场景 | 用户看到 | 断言/出处 |
+| --- | --- | --- |
+| 网关只监听回环 | ②卡片黄色提示「只监听了 127.0.0.1，手机扫了也连不上」+「用 start-gateway.bat…」 | `warn.code=pair.loopback-only`（server 测试） |
+| 没有局域网地址 | 「没检测到局域网地址…先连 Wi-Fi/网线」 | `warn.code=pair.no-lan-address` |
+| 二维码生成异常 | 「二维码生成失败：…」+「手动填地址和这 6 位码」 | `warn.code=pair.qr-failed` |
+| 扫到普通二维码 | 「这不是配对二维码」+「重扫或手动填写」 | `PairPayloadParser.parse()=null` → banner |
+| 扫到只有地址的链接 | 「扫到了网关地址，还缺配对码」+「扫带码的那一张」 | `code=null` → banner |
+| 从外部深链进来 | 填好地址与码 + 「已从链接填入配对信息」+「确认地址是你的电脑再点配对」 | `autoPair=false`，不自动连 |
+| 相机权限被拒 | 全屏说明 +「允许使用相机」/「去系统设置」/「先手动输入」 | QrScanScreen 权限块 |
+| 相机打不开/被占用 | 错误原文 +「先关掉别的相机应用，再点重试」+ 重试按钮 | `onCameraError` |
+| 配对码过期 | 网关原有 `pair.code-expired` + hint 指向「重新生成」 | 既有测试 |
+
+### 20.9 回滚与残余
+
+- **网关/插件**：回退 `src/server.js` 的 `handleAdminPair`、删除 `src/pair-qr.js` + `src/vendor/`；
+  插件 ② 卡片回退到只显示 6 位码。手动配对完全没动，回滚不影响任何既有用法。
+- **App**：回退 `QrScanScreen.kt`、`pair/`、`ChatViewModel.pairFromScan`、Manifest 的 CAMERA 与
+  intent-filter、build.gradle 三个 CameraX 依赖 + zxing。首启页面只剩手动输入，行为与 0.1.0 一致。
+- **残余**：APK 体积 +2.8MB；清单多了 CAMERA 权限（安装页会显示「相机」），
+  `THIRD_PARTY_NOTICES.md` 已补 qrcode-generator / ZXing / CameraX 的许可说明。
+
+## 21. 2026-10-31 19:45–20:05 设置页一键启动网关（不用 bat、不用命令行）
+
+### 21.1 用户原话
+
+> 「需要一个不依赖改代码就能拉起网关的按钮」
+
+背景：DSH 设置页里显示「网关状态：关闭」，因为网关是独立进程，用户得自己去双击 `start-gateway.bat`。
+
+### 21.2 链路
+
+```
+设置页 ① 卡片「启动网关」
+  → POST /dsh-mobile-gateway/api/start（插件代理，仅本机回环）
+  → dsh-plugin/lib/index.js  route('POST', '/start')
+  → dsh-plugin/lib/gateway-process.js  startGateway()
+      → findNode()：DSH 自带 node → %LOCALAPPDATA% 安装目录 → 系统 node → Electron 兜底
+      → spawn(node, ['src/main.js', '--listen', '0.0.0.0:8788', '--pair'])
+         cwd=仓库目录，stdout/stderr → <DSH_HOME>/mobile-gateway/gateway.log
+      → 每 300ms 探 /v1/health，最多 12 秒
+  → 返回 { started, pid, port, log }，前端刷新状态
+「停止网关」→ POST /api/stop → taskkill /pid <pid> /T /F（连 DSH/ACP 子进程一起收）
+DSH 退出 → ctx.effect 清理里 stopGateway()（只停按钮启动的那个）
+```
+
+谁读这些接口：设置页 `dsh-plugin/lib/client.js`；`test/gateway-process.test.js`。
+
+### 21.3 机制
+
+1. **为什么参数写死 `--listen 0.0.0.0:8788 --pair`**：与 `start-gateway.bat` 完全一致，
+   避免「bat 能起、按钮不能起」；`--pair` 让新设备有码可用，已有设备令牌不受影响。
+2. **为什么优先 DSH 自带 node**：DSH 主进程的 `process.execPath` 是 **Electron 的 exe**，
+   `spawn(execPath, ['src/main.js'])` 会把它当应用参数，起不来。
+   顺序：`DSH_MOBILE_NODE` 环境变量 → `process.resourcesPath/runtime/primary-runtime/dependencies/node/bin/node.exe`
+   → `%LOCALAPPDATA%\Programs\DeepSeek Harness\...` → `%ProgramFiles%\nodejs` → `execPath`（本身就是 node 时）
+   → 最后才用 Electron 加 `ELECTRON_RUN_AS_NODE=1`。
+3. **启动成功的判据是 HTTP 起来**，不是 DSH 连上：`/v1/health` 一响应就返回；
+   DSH/ACP 的连接状态在 ① 卡片里单独显示（本来就有）。
+4. **停止必须杀进程树**：Windows 上 `child.kill()` 只杀网关本身，它 spawn 的 DSH(ACP)
+   会留下来继续吃内存/占模型。用 `taskkill /T /F`。
+5. **生命周期跟 DSH 走**：按钮启动的网关在 DSH 退出/插件重载时被停止，
+   避免出现「没有窗口、界面上也停不掉」的隐藏进程；想让它脱离 DSH 常驻，用 bat（界面会明确说明）。
+
+### 21.4 爆炸半径
+
+3 个进程（设置页 / DSH 宿主 / 网关+ACP）；写 `~/.dsh/mobile-gateway/gateway.log`（追加）；
+不碰会话/记忆/令牌；`/admin/*` 仍是回环限定，`/start` 也只在插件代理里接受本机来源。
+最坏情况：端口被占 → 启动失败并显示日志尾部，不会静默。
+
+### 21.5 取舍
+
+| 方案 | 收益 | 代价 | 结论 |
+| --- | --- | --- | --- |
+| 让用户继续双击 bat | 零代码 | 就是这次要解决的痛点 | ❌ |
+| 插件 `spawn('cmd', ['/c','start-gateway.bat'])` | 复用 bat 的防火墙逻辑 | 会弹一个黑窗口、`pause` 会挂住、退出码拿不到 | ❌ |
+| **插件直接 spawn node + main.js** | 无窗口、可等待、可停止、日志可读 | 自己维护 node 探测与进程树 | ✅ |
+| DSH 启动时自动拉起 | 更省一步 | 用户可能只想用桌面端；端口/权限副作用不该自动发生 | ❌（先做按钮） |
+| 停止用 `child.kill()` | 简单 | ACP 子进程漏掉 | ❌ |
+| **`taskkill /T /F`** | 收干净 | Windows 专属分支 | ✅ |
+
+### 21.6 生效与重启
+
+改的是插件宿主代码（`dsh-plugin/lib/index.js`、新增 `gateway-process.js`）+ 设置页前端
+（`client.js`），**都需要重启 DSH** 才加载。
+
+### 21.7 验证
+
+- `node test/run-all.js` → **174/174**（新增 `gateway-process` 3 条：node 探测顺序、
+  真起假网关→重复启动→停止、秒退失败必须带 `code/hint` 与日志尾部）。
+- 真实链路（用真 `main.js`，端口 8791）：3.25 秒内 HTTP up → `/v1/health` ok →
+  `stopGateway()` 后端口释放（探活为 down）。
+- 未验证：DSH 设置页里点按钮（需要重启 DSH 后在界面上手点）；
+  Electron 兜底路径（本机有 DSH 自带 node，走不到 `ELECTRON_RUN_AS_NODE`）。
+
+### 21.8 失败路径
+
+| 场景 | 用户看到 | 断言/出处 |
+| --- | --- | --- |
+| 8788 被占用 / 进程秒退 | 红块：`网关没起来：进程退出（code=1 …）` + 日志最后几行 + 日志路径 + 常见原因 | `gateway.start-failed`（单测断言 hint 含日志） |
+| 12 秒没监听 | 同上，reason=启动超时 | 同上 |
+| 找不到 node | 红块：`没找到可用的 node.exe` + 「装 Node 22+ 或设 DSH_MOBILE_NODE」 | `gateway.node-missing` |
+| 找不到网关源码 | 红块 + 「插件和网关要放同一目录」 | `request.not-found` |
+| 网关是 bat 起的，点停止 | 红块：「这个网关不是从 DSH 启动的」+「关掉那个窗口」 | `gateway.not-managed` |
+| 宿主是旧版（没重启 DSH） | 红块：「DSH 还在运行旧版插件（缺少启动接口，HTTP 405）」+「完全退出 DSH 再打开」 | `isStaleHost()` 识别 405 / 「方法不对」 |
+
+### 21.9 回滚与残余
+
+回滚：删 `gateway-process.js`、`index.js` 的 import 与 4 个路由改动、`client.js` 的
+启动/停止按钮与两个 handler，恢复旧版 ① 卡片文案；删测试文件与 `run-all.js` 一行。
+残余：`gateway.log` 会持续追加（每次点击都写一行启动头）——想清理由用户手动删。
+
+## 22. 2026-10-31 20:05 扫码页误报「相机打不开」：Compose 取消异常被当成故障
+
+### 22.1 现象
+
+真机点「扫码配对」→ 界面红字：`相机打不开：The coroutine scope left the composition`，
+下方提示「关掉别的用相机的应用」，但当时只开了本 App。
+
+### 22.2 根因（不是相机）
+
+`The coroutine scope left the composition` 是 Compose 的
+`LeftCompositionCancellationException`，只在 `LaunchedEffect` 被取消时抛出。
+
+1. `QrScanScreen` 用 `LaunchedEffect(previewView, key)`，`previewView` 是 `mutableStateOf`，
+   由 `AndroidView(factory)` 在组合期写入；
+2. effect 在 apply 阶段执行时，读到的 `previewView` 已经是新值 → 真的进入相机绑定并挂起；
+3. 状态写入触发重组，key 变化 → 旧 effect 被取消 → 挂起处抛出取消异常；
+4. `catch (e: Exception)` 把取消异常当业务错误显示出来（UI 上就成了「相机打不开」）。
+
+### 22.3 修法
+
+- PreviewView 改为 `AtomicReference` 持有（工厂写 ref 不触发重组），`LaunchedEffect(key)` 只用重试计数；
+- 通用 catch 之前先 `catch (e: CancellationException) { throw e }`；
+- 真异常加 `Log.e("QrScanScreen", "camera bind failed", e)`，便于 logcat 抓栈。
+
+### 22.4 验证
+
+- `gradle assembleDebug` 成功；dex 里有 `camera bind failed` 字符串（确认装的是新包）；
+- 已 `adb install -r -d` 到红米 K80；
+- **待用户实测**：点「扫码配对」应直接出现取景画面。
+- 回滚：还原 `QrScanScreen.kt` 的 CameraPreview 段即可，其他不受影响。
+
+## 23. 2026-10-31 20:10 手机独立选鱼：本地多条鱼时，手机用哪条
+
+### 23.1 用户原话
+
+> 「这部分，是当本地有多条鱼，可以选择手机上是哪条鱼，的意思吗？」
+> （原实现不是选择器，只读桌面当前角色）→「做」
+
+### 23.2 语义
+
+| 选择 | 行为 |
+| --- | --- |
+| 未选（默认） | **跟随桌面当前角色**：`characters/current.json` 指向谁，手机就用谁 |
+| 固定某条 | 无论桌面切到哪条，手机始终用这条（`config.json.personaCharacterId`） |
+| 固定的角色被删了 | 回退到桌面当前角色，状态里 `selectionMissing:true`，界面黄字提示重选 |
+| 切换之后 | **下一条消息**立即换人（强制重新注入，不受每会话 4 次上限限制）；旧会话上下文里仍是原角色，建议新开会话 |
+
+### 23.3 链路
+
+```
+设置页 ④ 卡片 <select>（只有 >1 条鱼时出现）
+  → PUT /dsh-mobile-gateway/api/persona {characterId}   （插件代理，仅本机）
+  → PUT /admin/persona                                  （网关，仅回环）
+      → fish.setCharacter(id) → selectedId，落盘 config.json.personaCharacterId
+  → 状态返回 characters/selectedId/followingDesktop/selectionMissing
+
+每轮发消息：
+  server.handlePrompt → fish.prepare(sessionId)
+      → buildFishContext({ characterId: selectedId })   ← 空 = 跟随 current.json
+      → 角色变了 → prefix「【角色已经换成「X」…】」+ 新人设+记忆
+```
+
+代码：`fish-context.js` 的 `listCharacters()` / `resolveFishFiles({characterId})`、
+`fish-inject.js` 的 `selectedId` / `character-switched`、`server.js` 的 `handleAdminPutPersona`、
+`dsh-plugin/lib/client.js` 的下拉框。
+
+### 23.4 机制与取舍
+
+- **为什么默认跟随而不是默认固定第一条**：大多数时候手机就是"出门时的那条鱼"，
+  跟着桌面走才符合直觉；只有用户显式选过才固定。
+- **为什么用 `index.json` 而不是扫目录**：名字、更新时间都在里面（SurfCore 自己维护）；
+  扫目录只是 `index.json` 缺失时的兜底。
+- **指定角色找不到时为什么不猜目录**：猜错等于把另一条鱼的记忆灌进去，比不做更糟；
+  所以退回桌面当前角色并显式标记。
+- **为什么换角色不受注入次数上限限制**：上限是为了防止"记忆更新"频繁重灌；
+  换角色是用户的显式动作，上下文里还是旧人格时必须说清楚，否则模型会继续演错人。
+- **为什么状态要带 `characters` 列表**：设置页下拉需要；网关本来就只能读，不额外写 SurfCore。
+
+### 23.5 爆炸半径
+
+网关内存里多一个 `selectedId` 与会话记账（`characterId`）；只写 `config.json` 的一个键
+（`personaCharacterId`）；不写 SurfCore 的任何文件；不新增端口/权限。
+
+### 23.6 生效与重启
+
+- 网关代码：**重启网关**（按钮「停止 → 启动」或 bat）。
+- 设置页下拉：**重启 DSH**（宿主与前端都改了）。
+- 已注入过的旧会话：切角色只影响后续消息的前缀，旧上下文里仍有原角色；**新开会话**才彻底干净。
+
+### 23.7 验证
+
+- `node test/run-all.js` → **187/187**（新增：角色列表、指定角色读取、缺失回退、签名随角色变化、
+  切角色强制重注入、setCharacter 落盘/内存、/admin/persona 四个契约用例）。
+- 真实 SurfCore 数据（网关 8791，只读）：`characters:[{id:char-mvupjovg,name:大肥鱼}]`、
+  `selectedId:null`、`followingDesktop:true`、人格 476 字 / 记忆 452 字。
+- 未验证：界面下拉的真实点击（本机目前只有 1 条鱼，选择器按设计不显示）；
+  两条鱼之间的实际切换与语气对比。
+
+### 23.8 失败路径
+
+| 场景 | 用户看到 | 断言/出处 |
+| --- | --- | --- |
+| 固定的角色被删 | 黄字「之前固定的角色不存在，现在临时用桌面当前角色，请重新选」 | `selectionMissing` |
+| 本机没有角色 | ④ 卡片原有「没找到 SurfCore 的角色」 | `reason=no-character` |
+| PUT 两个字段都不给 | 400 + hint「characterId 传角色 id；null 表示跟随」 | server 测试 |
+| 宿主是旧版 | 与启动按钮同款 405 提示（需重启 DSH） | `isStaleHost()` |
+
+### 23.9 回滚与残余
+
+回退 `fish-context.js` / `fish-inject.js` / `server.js` / 插件三处，删除 `personaCharacterId` 配置键即可；
+默认行为（跟随桌面）与之前完全一致。残余：切换角色的瞬间旧会话上下文里有前后两个角色，
+我们只能追加"角色已换"说明，删不掉历史。
+
+## 24. 2026-10-31 20:20 点「开启」提示「方法不对」：插件同路径只保留了一个 HTTP 方法
+
+### 24.1 现象
+
+④ 卡片点「开启」→ 红字「方法不对」；GET 状态一直正常。
+（推测：③ 卡片的「保存并生效」也是同一个原因，它同样是 GET+PUT 同路径。）
+
+### 24.2 根因
+
+插件里每个方法各调一次 `ctx.webServer.register({ kind:'exact', path, handler })`：
+`/api/persona` 先注册 GET、再注册 PUT。DSH 的 webServer **按路径**建路由，
+同路径第二次注册把前一个顶掉 → PUT 请求落到「只剩 GET」的那条，被包装器判 405「方法不对」。
+请求根本没到网关（网关日志无记录），所以不是网关/角色逻辑的问题。
+
+### 24.3 修法
+
+一个路径只注册一次，handler 内部按 `req.method` 分发（`byPath: Map<path, {GET, PUT}>`）；
+未注册的方法仍回 405，但不再影响同路径其它方法。
+
+### 24.4 验证
+
+- 新增 `test/plugin-routes.test.js`：用「同 path 后注册覆盖前注册」的假 ctx 复现 DSH 语义，
+  断言每个路径只注册一次、GET/PUT 各自可达、DELETE 仍 405、非本机 403、旧 `{enabled}` 调用兼容。
+- `node test/run-all.js` → **193/193**。
+- **待用户实测**：重启 DSH 后点「开启」/「保存并生效」。
+
+### 24.5 生效与回滚
+
+插件宿主代码，**重启 DSH** 生效。回滚：还原 `apply()` 里的 `route()` 实现即可（会退回 405 bug）。

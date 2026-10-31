@@ -232,8 +232,15 @@ const server = createGatewayServer({
     enabled: process.env.DSH_MOBILE_PERSONA !== undefined
       ? process.env.DSH_MOBILE_PERSONA !== '0'
       : startupCfg.personaEnabled !== false,
+    // 手机固定的角色（null = 跟随桌面当前角色）；同样支持环境变量覆盖
+    characterId: process.env.DSH_MOBILE_PERSONA_CHARACTER !== undefined
+      ? (process.env.DSH_MOBILE_PERSONA_CHARACTER || null)
+      : (typeof startupCfg.personaCharacterId === 'string' && startupCfg.personaCharacterId
+        ? startupCfg.personaCharacterId
+        : null),
     // 开关落盘：否则重启网关又回到默认值，用户会以为开关没生效
     onToggle: (v) => saveStartupConfigPatch(baseConfig.configFile, { personaEnabled: v }),
+    onCharacterChange: (id) => saveStartupConfigPatch(baseConfig.configFile, { personaCharacterId: id }),
   }),
   meta: {
     version: config.version,

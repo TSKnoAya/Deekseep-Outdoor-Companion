@@ -8,6 +8,7 @@ import com.dsh.mobile.net.GatewayClient
 import com.dsh.mobile.net.GatewayException
 import com.dsh.mobile.net.SseSubscription
 import com.dsh.mobile.net.StreamEvent
+import com.dsh.mobile.pair.PairPayloadParser
 import com.dsh.mobile.voice.DeviceSpeechRecognizer
 import com.dsh.mobile.voice.HeadsetDetector
 import com.dsh.mobile.voice.SpeechException
@@ -106,6 +107,64 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
         }
+    }
+
+    /**
+     * 扫码 / 深链（`dshmobile://pair?...`）的配对入口。
+     *
+     * 扫到的东西不可信：先解析，解析不了就明确说「这不是配对二维码」，
+     * 而不是拿一段乱码去当网关地址发请求（那样只会得到「连不上」）。
+     *
+     * `autoPair=false` 用于**外部深链**：任何网页都能写这个链接，
+     * 自动连过去等于让别处替你选网关；所以只填好字段，让用户看清地址后自己点「配对」。
+     */
+    fun pairFromScan(raw: String, autoPair: Boolean = true) {
+        val payload = PairPayloadParser.parse(raw)
+        if (payload == null) {
+            _state.update {
+                it.copy(
+                    banner = Banner(
+                        "这不是配对二维码",
+                        "扫到的内容看不懂。请点「扫码配对」对准电脑设置页里的二维码重扫，或手动填写地址和 6 位配对码。",
+                        true,
+                    ),
+                )
+            }
+            return
+        }
+        if (_state.value.paired) {
+            _state.update {
+                it.copy(banner = Banner("已经配对过了", "要用另一台电脑，先在设置里断开配对，再扫新二维码。", false))
+            }
+            return
+        }
+        _state.update { it.copy(baseUrl = payload.url, pairCode = payload.code ?: "") }
+        if (payload.code == null) {
+            _state.update {
+                it.copy(
+                    banner = Banner(
+                        "扫到了网关地址，还缺配对码",
+                        "这是普通地址链接。请在电脑设置页点「生成二维码」，扫带配对码的那一张；或看网关窗口里的 6 位数填进来。",
+                        false,
+                    ),
+                )
+            }
+            return
+        }
+        if (!autoPair) {
+            _state.update {
+                it.copy(
+                    banner = Banner(
+                        "已从链接填入配对信息",
+                        "确认上面的地址就是你的电脑（例如 http://192.168.x.x:8788），再点「配对」。",
+                        false,
+                        ok = true,
+                    ),
+                )
+            }
+            return
+        }
+        pair()
     }
 
     /**

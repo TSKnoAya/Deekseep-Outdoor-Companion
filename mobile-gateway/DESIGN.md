@@ -66,11 +66,30 @@
 | `POST` | `/v1/tts` | 文字 → 音频（后端可切，火山未配置时明确报错） |
 | `GET` | `/v1/settings` / `PUT` | 语音模式、播报档位 |
 
+配对有两条入口，**手动输入一直是底线**：
+
+- 手动：App 里填「网关地址」+ 6 位码（窗口/设置页都会显示）；
+- 扫码：电脑设置页 `POST /admin/pair`（仅回环）返回每个可达地址的二维码矩阵，
+  载荷是 `dshmobile://pair?v=1&u=<地址>&c=<码>`；App 用相机（CameraX + ZXing）扫，
+  解析成功就复用同一条 `/v1/pair`。系统相机/微信扫到深链也能直接打开 App，
+  但**只填入地址与码、不自动连**（外部链接不可信，用户确认地址后再点配对）。
+  载荷格式在 `src/pair-qr.js` 与 `pair/PairPayload.kt` 各实现一次，改格式必须两边同步。
+
 ### 3.1 关键约束（来自 ACP 实测）
 
 1. **单会话同时只能一个 prompt**：源码原文 `a prompt is already in flight for this session`。网关必须自己排队，不能靠 ACP。
 2. **`session/prompt` 阻塞到本轮结束**。所以 `POST /v1/messages` 必须立刻返回，结果走 SSE。一轮可能十几分钟。
 3. **审批是服务端主动请求**（`session/request_permission`），手机端必须能回；不回就挂到超时。
+
+### 3.2 网关生命周期
+
+- 网关是**独立进程**，DSH 只负责看状态；默认由 `start-gateway.bat` / 命令行启动。
+- DSH 设置页 ① 卡片提供「启动网关」：插件宿主用与 bat 相同的参数
+  （`node src/main.js --listen 0.0.0.0:8788 --pair`）spawn，日志写
+  `<DSH_HOME>/mobile-gateway/gateway.log`，12 秒内 `/v1/health` 不通就带日志尾部报错。
+- 按钮启动的实例随 DSH 退出一起停（`taskkill /T` 连 ACP 子进程）；
+  要脱离 DSH 常驻就用 bat。Node 探测顺序见 `dsh-plugin/lib/gateway-process.js`——
+  注意 DSH 的 `process.execPath` 是 Electron，不能直接当 node 用。
 
 ---
 
@@ -125,6 +144,9 @@
 3. 设备令牌存 Android Keystore（App 侧）；网关侧只存 sha256。
 4. **不做端口转发到公网**。要远程用 Tailscale/WireGuard。
 5. 审批接口只接受已配对设备；审批动作写审计日志。
+6. **二维码 = 一次性凭证**：里面是「地址 + 5 分钟内有效、只能用一次的配对码」。
+   能看到电脑屏幕的人本来就能读到码，所以它不扩大攻击面；但不要截图发到群里。
+   `/admin/pair` 仍然只接受本机回环请求，远程设备无法自己生成二维码。
 
 ---
 

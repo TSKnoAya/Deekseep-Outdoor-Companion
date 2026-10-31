@@ -11,6 +11,193 @@
 
 ## 待发布
 
+### 批次 2026-10-31 10:20 · Phase 0A 上下文/成本遥测（只测量）
+<!-- release-batch: start=2026-10-31T10:20+08:00 end=2026-10-31T10:40+08:00 commits=c7df162 -->
+
+**覆盖提交**：`c7df162`
+**建议**：**0.7.24**（若人格卡分层已作为 0.7.23 发布；否则可与它合并为 0.7.23）
+
+**需求**：先建立真实 token/上下文账单，不改行为。
+
+**实现**：
+- `src/context-telemetry.js` 旁路 JSONL：wake / model usage / tool 结果字符数+耗时 / turn 起止；
+- 插件 `session/event` 采所有会话；bridge 投递 wake 时记录 prompt 总字符与分段；
+- `scripts/context-telemetry-report.mjs` 按唤醒原因/工具聚合基线，标 observed/estimated/覆盖缺口；
+- 不记录消息正文/工具参数；写失败不影响主链路；不改 prompt、工具、guard、会话策略。
+
+**未做**：Phase 1 工具契约/复合快照；系统提示/工具 schema/历史的精确拆分。
+
+**case**：[docs/cases/2026-10-31-context-telemetry.md](cases/2026-10-31-context-telemetry.md)
+**验证**：`node scripts/test-context-telemetry.mjs`；`plugins/surfcore npm test`；
+`npm run test:audit` 94/94。
+**交接**：同步 `src/{context-telemetry,bridge}.js`、`plugins/surfcore/lib/index.js`、
+`scripts/context-telemetry-report.mjs`、测试、docs、manifest。
+重启 DSH + QQ 桥接后开始采集；建议 3–7 天基线再进 Phase 1。
+
+---
+
+### 批次 2026-10-31 10:05 · 人格卡分层（0.7.22 后）
+<!-- release-batch: start=2026-10-31T10:05+08:00 end=2026-10-31T10:35+08:00 commits=bf673a2 -->
+
+**覆盖提交**：`bf673a2`
+**建议**：patch → **0.7.23**
+
+**需求**：人格卡拆成【人格核心】【人格日常】【场景人格】；QQ 分群聊/私聊；
+B站/桌宠各用各的场景；全部手动编辑；角色页醒目说明本次改动。
+
+**实现**：
+- `persona.md` 继续是人格核心；新增可选 `persona.daily.md` 与
+  `persona.scenes/{qq-group,qq-private,bili,pet}.md`；
+- `src/persona-layers.js` 统一组合核心→场景→日常，超预算先裁日常/场景；
+- QQ 按 `group:`/`private:` 选场景；B站/桌宠接同一套分层；
+- `/persona` 三层读写、按层备份恢复；快照/回档带三层；
+- 角色页三层手动编辑 + 顶部醒目说明；模型不自动改写；
+- 记忆卡/向量记忆未动。
+
+**未做**：日常/场景自动生成、任务型 ContextRecipe、记忆分层、缓存收益实测。
+
+**case**：[docs/cases/2026-10-31-persona-layers.md](cases/2026-10-31-persona-layers.md)
+**验证**：`node scripts/test-persona-layers.mjs`；
+`plugins/surfcore/scripts/test-character-api.mjs`；`test-client-contract.mjs`；
+`plugins/surfcore npm test`；`npm run test:audit` 93/93。
+**交接**：同步 `src/{persona-layers,character-persona,bridge}.js`、
+`plugins/surfcore/lib/{index,client,scheduler,pet-chat}.js`、测试、docs、manifest。
+改动后 QQ 下一条消息 / B站下一次醒来 / 桌宠下一次对话生效；真实页面/注入还需手测。
+
+---
+
+### 已发布 v0.7.21 · 2026-10-31 08:10 · 一键启动 SurfCore / 一键停止（0.7.20 后）
+<!-- release-batch: start=2026-10-31T08:10+08:00 end=2026-10-31T08:30+08:00 commits=282dc6c -->
+
+**覆盖提交**：`282dc6c`
+**建议**：patch → **0.7.21**
+
+**需求**：一键启动整合成多选 QQ（含 SnowLuma）/ B站 / 桌宠 / 语音；语音本地/云端单选；
+下面加一键停止；每项显示状态，切换页一致；失败可见且给建议。
+
+**实现**：
+- 概览「一键启动 SurfCore」多选 + 语音分支；「一键停止（全部）」；
+- `start-selected` / `stop-selected`，每项 `ok/code/error/hint`；
+- 停止顺序语音→QQ→B站→桌宠（语音由桥接托管，避免孤儿进程）；
+- `overview.launch` 统一 `bridgeStatus / schedulerStatus / petService / /api/voice/packs`；
+- QQ 停止不关闭 SnowLuma 本体；语音未装/桥接未起/平台开关关闭都有结构化错误。
+
+**未做**：真实进程启停手测、语音页深链、SnowLuma 本体停止（设计边界）。
+
+**case**：[docs/cases/2026-10-31-one-click-launch-stop.md](cases/2026-10-31-one-click-launch-stop.md)
+**验证**：`node scripts/test-launch-components.mjs`；`plugins/surfcore npm test`
+（test-client-contract / test-platform-start-host）；`npm run test:audit` 90/90。
+**交接**：同步 `plugins/surfcore/lib/{index,client}.js`、`scripts/test-launch-components.mjs`、
+`plugins/surfcore/scripts/{test-client-contract,test-platform-start-host}.mjs`、docs、manifest。
+重启 DSH 后页面生效；真实启动/停止需手测。
+
+---
+
+### 已发布 v0.7.20 · 2026-10-30 23:40 · 语音包退出 zip 自动更新
+<!-- release-batch: start=2026-10-30T23:40+08:00 end=2026-10-30T23:50+08:00 commits=44bae2d -->
+
+**覆盖提交**：`44bae2d`
+**建议**：与 SnowLuma 通道闸门一起发 **0.7.20**
+
+**问题**：语音包没有 `package.json`，被登记为 `updates.components()` 的 `kind:auto`，
+下载后按 SurfCore 的 `surfcore-* + package.json + install-manifest` 解析，必然
+`verify.bad-archive`；补 `package.json` 也解决不了根目录/清单/config 保留。
+
+**修法**：
+- 语音包从自动更新列表移除；不再下载/尝试覆盖；
+- 语音页明确“不参与检查更新，需要新版本时用重新导入离线包”，
+  导入保留 config.toml / .venv / models / vendor；
+- 不改公开语音仓库，不写语音包专用 updater。
+
+**case**：[docs/cases/2026-10-30-voice-pack-no-auto-update.md](cases/2026-10-30-voice-pack-no-auto-update.md)
+**验证**：`plugins/surfcore npm test`（test-updates-voice 新增断言）；`npm run test:audit` 89/89。
+**交接**：同步 `plugins/surfcore/lib/index.js`、`plugins/surfcore/lib/client.js`、
+`plugins/surfcore/scripts/test-updates-voice.mjs`、docs、manifest；重启 DSH 后更新列表不再出现语音包。
+
+---
+
+### 已发布 v0.7.20 · 2026-10-30 19:30 · SnowLuma 断线通道闸门
+<!-- release-batch: start=2026-10-30T19:30+08:00 end=2026-10-30T19:50+08:00 commits=44481cc -->
+
+**覆盖提交**：`44481cc`
+**建议**：patch → **0.7.20**（0.7.19 已发布，不重复发）
+
+**问题**：SnowLuma 未启动/掉线时，`proactiveCheck` 仍创建 DSH 会话、跑完整 LLM，
+发送失败只写 bridge.log，每 40–90 分钟重复空烧。
+
+**修法**：
+- `sendWakePromptV2` 开头检查 `qqSendChannelStatus()`：WS 未连接/最近发送失败 →
+  不创建 DSH 会话、不投 prompt、不跑模型；
+- `sendToQQ` / `onebotSend` 记录成功/失败；连续 3 次失败 → 该会话自动唤醒暂停 30 分钟，
+  `scheduleProactiveCheckV2` 不再排下一次；
+- SnowLuma `close` 写 L2 `send-channel-down`，`open` 写 L1 恢复；首次发送失败 L1；
+- UI SnowLuma 安装卡显示 `diagnosis.hint`；事件中心弹窗给“启动/重启 SnowLuma，
+  确认 3000/3001”的建议；
+- 新增 `test-snowluma-channel-gate`（断开/暂停不创建 DSH 会话，恢复后可创建）。
+
+**未做**：首次 HTTP 失败预知、`wasted` 精确金额、端口/进程体检。
+
+**case**：[docs/cases/2026-10-30-snowluma-channel-gate.md](cases/2026-10-30-snowluma-channel-gate.md)
+**验证**：`node scripts/test-snowluma-channel-gate.mjs`；`npm run test:audit` 89/89；
+`plugins/surfcore npm test`；`node scripts/test-audit-bridge.mjs`。
+**交接**：同步 `src/bridge.js`、`src/gate-events.js`、`plugins/surfcore/lib/client.js`、
+`scripts/test-snowluma-channel-gate.mjs`、`scripts/audit-bridge-harness.mjs`、manifest、docs。
+重启 DSH/桥接后生效；真实停 SnowLuma 观察零 token 增长需手测。
+
+---
+
+### 批次 2026-10-30 17:20 · 闸门事件中心 + 单轮 L3 止血
+<!-- release-batch: start=2026-10-30T17:20+08:00 end=2026-10-30T17:35+08:00 commits=3a82618 -->
+
+**覆盖提交**：`3a82618`
+**建议**：patch → **0.7.19** 或发布会话当前版本 +1
+
+**新增**：
+- `src/gate-events.js`：L0–L3 分级、脱敏、ack、2MB 轮转；
+- `src/turn-guard.js` + bridge `guardTurnEvent`：单轮工具步数 40、同一 tool+error 3 次、
+  回合内每日额度耗尽 → **cancel-only** 停止 + 直接 QQ 通知；
+- `src/dsh-client.cancelTurn()`（不清 inbox）；
+- 设置 → 概览「安全提醒」卡片，L2/L3 弹窗；插件 `/gate-events`；
+- 兼容性体检 blocker/high 自动进事件中心。
+
+**未做**：单轮费用上限（价格表覆盖不全）、pre-call 阻断、L0/L1 全量生产者接入、
+端口/进程归属；报告/文档已标“未检查”。
+
+**case**：[docs/cases/2026-10-30-gate-events-turn-guard.md](cases/2026-10-30-gate-events-turn-guard.md)
+**验证**：`node scripts/test-gate-events.mjs`；`npm run test:audit` 88/88；
+`plugins/surfcore npm test`；`node scripts/test-audit-bridge.mjs`。
+**交接**：同步 `src/gate-events.js`、`src/turn-guard.js`、`src/bridge.js`、`src/dsh-client.js`、
+`plugins/surfcore/lib/{index,client}.js`、`scripts/test-gate-events.mjs`、manifest、docs；
+重启 DSH 后生效。真实 L2/L3 弹窗与 cancel 时延需手测。
+
+---
+
+### 批次 2026-10-30 16:10 · 插件冲突体检（只读）
+<!-- release-batch: start=2026-10-30T16:10+08:00 end=2026-10-30T16:20+08:00 commits=6023a38,36da77c -->
+
+**覆盖提交**：`6023a38`（功能）、`36da77c`（安装清单/接线断言，到本批 HEAD）
+**建议**：patch → **0.7.19**（或发布会话当前版本号 +1）
+
+**新增**：设置 → 概览「检查更新」旁「插件体检」。
+只读扫描 profile bundles / `cordis.patch.yml` / 已安装包 / 已知第三方插件 / QQ 工具策略。
+
+**能查**：
+- 第三方工具是否会被 QQ guard 拒绝（如 `billion-context` 的 5 个上下文工具）；
+- 第三方上下文插件是否接管压缩且 `compaction-basic auto=false`；
+- 插件未声明工具清单 → `unknown`，报告显示覆盖范围/未检查项；
+- 版本/已知规则/`surfcore.compat.json` 声明。
+
+**不能查**：任意第三方工具枚举、最终 prompt、任意自定义状态路径、端口/进程归属、
+运行时工具拒绝/重复回复/回合熔断（报告“未检查”）。
+
+**case**：[docs/cases/2026-10-30-plugin-compat-check.md](cases/2026-10-30-plugin-compat-check.md)
+**验证**：`node scripts/test-plugin-compat.mjs`；`npm run test:audit` 87/87；
+`plugins/surfcore npm test` 全绿；真实 desktop profile 扫描只报 `dsh-whale-widget` 的 unknown info。
+**交接**：同步 `plugins/surfcore/lib/compat*.js`、`qq-tool-restrict.mjs` 导出、`client.js`、`index.js`、
+`scripts/test-plugin-compat.mjs`、`release/install-manifest.json`、docs。重启 DSH 后按钮生效。
+
+---
+
 ### 批次 2026-10-29 23:30 · 管理员称呼投影修复（v0.7.3 后热修）
 <!-- release-batch: start=2026-10-29T23:30+08:00 end=2026-10-29T23:40+08:00 commits=00cc8b2 -->
 

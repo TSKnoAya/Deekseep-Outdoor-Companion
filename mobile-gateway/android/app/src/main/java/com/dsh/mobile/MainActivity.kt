@@ -1,5 +1,6 @@
 package com.dsh.mobile
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -68,5 +69,21 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+        // 系统相机/微信扫到 dshmobile://pair?... 后点「打开」会走到这里
+        handlePairIntent(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handlePairIntent(intent)
+    }
+
+    private fun handlePairIntent(intent: Intent?) {
+        val data = intent?.data ?: return
+        if (!"dshmobile".equals(data.scheme, ignoreCase = true)) return
+        if (data.host != "pair") return
+        // 外部链接任何人都能发：只填不连，让用户确认地址后再点「配对」
+        vm.pairFromScan(data.toString(), autoPair = false)
     }
 }

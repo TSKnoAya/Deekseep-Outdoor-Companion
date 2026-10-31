@@ -26,6 +26,55 @@ export function readCurrentCharacter(surfDir, fsLike = fs) {
   }
 }
 
+/**
+ * 本机有哪些角色。
+ *
+ * 优先读 SurfCore 自己维护的 `characters/index.json`（带名称与更新时间）；
+ * 没有 index 时退回扫目录（每个角色目录里一定有 `character.json`）。
+ * 读不到任何东西时返回空数组——**列出角色失败不该让注入跟着失败**。
+ */
+export function listCharacters(surfDir, fsLike = fs) {
+  const base = path.join(surfDir, 'characters');
+  const out = [];
+  try {
+    const doc = JSON.parse(fsLike.readFileSync(path.join(base, 'index.json'), 'utf8'));
+    if (Array.isArray(doc?.characters)) {
+      for (const c of doc.characters) {
+        if (!c?.id) continue;
+        out.push(normalizeCharacter(c));
+      }
+    }
+  } catch {
+    /* index 缺失/损坏：下面扫目录 */
+  }
+  if (out.length === 0 && typeof fsLike.readdirSync === 'function') {
+    try {
+      for (const name of fsLike.readdirSync(base)) {
+        const dir = path.join(base, String(name));
+        try {
+          const meta = JSON.parse(fsLike.readFileSync(path.join(dir, 'character.json'), 'utf8'));
+          if (meta?.id) out.push(normalizeCharacter({ ...meta, dir }));
+        } catch {
+          /* 不是角色目录 */
+        }
+      }
+    } catch {
+      /* 没有 characters 目录 */
+    }
+  }
+  // 最近更新过的排前面；没有时间的排后面
+  return out.sort((a, b) => String(b.updatedAt ?? '').localeCompare(String(a.updatedAt ?? '')));
+}
+
+function normalizeCharacter(c) {
+  return {
+    id: String(c.id),
+    name: String(c.name ?? c.personaMeta?.name ?? c.id),
+    updatedAt: c.updatedAt ? String(c.updatedAt) : null,
+    dir: c.dir ? String(c.dir) : null,
+  };
+}
+
 function readText(file, fsLike) {
   try {
     return String(fsLike.readFileSync(file, 'utf8')).trim();
@@ -47,14 +96,23 @@ export function resolveFishFiles(options = {}) {
   if (!dshHome) return null;
 
   const surfDir = path.join(dshHome, 'surfcore');
-  const cur = readCurrentCharacter(surfDir, fsLike);
-  if (!cur) return null;
+  const want = options.characterId ? String(options.characterId) : null;
+  let picked = null;
+  if (want) {
+    // 手机端指定了角色：只从清单里找，**不**回退到"猜一个目录"——
+    // 猜错等于把别的角色的记忆灌进去，比不做更糟。
+    picked = listCharacters(surfDir, fsLike).find((c) => c.id === want) ?? null;
+  }
+  if (!picked) picked = readCurrentCharacter(surfDir, fsLike);
+  if (!picked) return null;
 
-  const charDir = cur.dir || path.join(surfDir, 'characters', cur.id);
+  const charDir = picked.dir || path.join(surfDir, 'characters', picked.id);
   const platform = options.platform === 'bili' ? 'bili' : 'qq';
   return {
-    name: cur.name,
-    id: cur.id,
+    id: picked.id,
+    name: picked.name,
+    // 想用 A、但本机已经没有 A（被删/被改名）→ 退回桌面当前角色，并明确标记
+    selectionMissing: Boolean(want && picked.id !== want),
     persona: path.join(charDir, 'persona.md'),
     memoryPrompt: path.join(charDir, 'memory', `memory-card-prompt-${platform}.md`),
     memoryCard: path.join(charDir, 'memory', 'memory-card.md'),
@@ -96,8 +154,7 @@ export function buildFishContext(options = {}) {
 
   const files = resolveFishFiles(options);
   if (!files) return { ok: false, reason: 'no-character' };
-  const cur = { name: files.name };
-  const persona = readText(files.persona, fsLike);
+  const cur = { name: files.name };  const persona = readText(files.persona, fsLike);
   let memory = readText(files.memoryPrompt, fsLike);
   // 没有 prompt 块时退一步用可读版（也能用，只是没有"遗忘规则"那几句）
   if (!memory) memory = readText(files.memoryCard, fsLike);
@@ -119,7 +176,9 @@ export function buildFishContext(options = {}) {
 
   return {
     ok: true,
+    id: files.id,
     name: cur.name,
+    selectionMissing: Boolean(files.selectionMissing),
     personaChars: persona.length,
     memoryChars: memory.length,
     truncated,

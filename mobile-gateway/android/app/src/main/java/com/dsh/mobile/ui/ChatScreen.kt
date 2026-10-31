@@ -30,6 +30,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
@@ -276,6 +277,19 @@ private fun subtitle(state: AppState): String = when {
 @Composable
 private fun PairingScreen(state: AppState, vm: ChatViewModel) {
     var showHelp by remember { mutableStateOf(false) }
+    var scanning by remember { mutableStateOf(false) }
+
+    if (scanning) {
+        QrScanScreen(
+            onDecoded = { text ->
+                scanning = false
+                vm.pairFromScan(text)
+            },
+            onCancel = { scanning = false },
+        )
+        return
+    }
+
     Column(
         Modifier
             .fillMaxSize()
@@ -287,11 +301,29 @@ private fun PairingScreen(state: AppState, vm: ChatViewModel) {
         Text("连接你的电脑", style = MaterialTheme.typography.headlineSmall)
         Spacer(Modifier.height(8.dp))
         Text(
-            "先在电脑上启动 DSH 手机网关，窗口里会打印网关地址和 6 位配对码。",
+            "电脑上打开 DSH 设置 →「手机网关」→ 生成二维码，然后用手机扫一下。",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(20.dp))
+
+        Button(
+            onClick = { scanning = true },
+            enabled = state.busy == null,
+            modifier = Modifier.fillMaxWidth().height(52.dp),
+        ) {
+            Icon(Icons.Default.QrCodeScanner, contentDescription = null)
+            Spacer(Modifier.width(8.dp))
+            Text("扫码配对")
+        }
+
+        Spacer(Modifier.height(20.dp))
+        Text(
+            "……或手动填写（窗口里会打印地址和 6 位配对码）",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(8.dp))
 
         OutlinedTextField(
             value = state.baseUrl,
@@ -381,11 +413,11 @@ private fun PairingScreen(state: AppState, vm: ChatViewModel) {
             title = { Text("怎么拿到配对码") },
             text = {
                 Column {
-                    Text("1. 在电脑上进入 mobile-gateway 目录")
-                    Text("2. 双击 start-gateway.bat（会自己找 node，不用装环境）")
-                    Text("   ；没有这个文件就命令行运行：")
-                    Text("   node src/main.js --listen 0.0.0.0:8788")
-                    Text("3. 那个窗口会打印两样东西（窗口别关）：")
+                    Text("1. 电脑上打开 DSH → 设置 →「手机网关」，点「生成二维码 / 配对码」")
+                    Text("2. 这台手机点「扫码配对」扫它；扫不了就照下面的地址和码手填")
+                    Text("   （网关要在跑：双击 start-gateway.bat；没有就命令行：")
+                    Text("   node src/main.js --listen 0.0.0.0:8788 ）")
+                    Text("3. 那个窗口也会打印两样东西（窗口别关）：")
                     Text(
                         "   手机端「网关地址」填：\n   http://192.168.1.247:8788\n   配对码 717842（5 分钟内有效）",
                         fontFamily = FontFamily.Monospace,
@@ -393,7 +425,7 @@ private fun PairingScreen(state: AppState, vm: ChatViewModel) {
                     )
                     Spacer(Modifier.height(8.dp))
                     Text("注意：电脑和手机要在同一个 Wi-Fi；Windows 防火墙首次要允许「专用网络」。")
-                    Text("配对码过期或换手机：重新双击 start-gateway.bat，会打印新码。")
+                    Text("配对码过期或换手机：在设置页重新生成即可。")
                 }
             },
             confirmButton = { TextButton(onClick = { showHelp = false }) { Text("知道了") } },

@@ -20,6 +20,7 @@ import { BackendRegistry } from '../src/voice/registry.js';
 import { createDeviceAsr } from '../src/voice/asr-device.js';
 import { createSettingsStore } from '../src/config.js';
 import { fail, CODES } from '../src/errors.js';
+import { parsePairPayload } from '../src/pair-qr.js';
 
 let server;
 let baseUrl;
@@ -31,6 +32,50 @@ let asr;
 let tts;
 let fakeAcp;
 let acpConnected = true;
+/** 角色上下文（「把鱼带到手机」）的假实现：只关心 /admin/persona 的读写契约。 */
+const fakeFish = {
+  enabled: true,
+  selectedId: null,
+  status() {
+    return {
+      enabled: this.enabled,
+      available: true,
+      reason: null,
+      character: this.selectedId === 'char-2' ? '大肥鱼' : '傲娇助手',
+      characterId: this.selectedId || 'char-1',
+      selectedId: this.selectedId,
+      followingDesktop: !this.selectedId,
+      selectionMissing: false,
+      characters: [
+        { id: 'char-1', name: '傲娇助手', updatedAt: '2026-10-30T00:00:00.000Z' },
+        { id: 'char-2', name: '大肥鱼', updatedAt: '2026-10-31T00:00:00.000Z' },
+      ],
+      personaChars: 10,
+      memoryChars: 20,
+      truncated: false,
+      maxInjections: 4,
+      lastReason: null,
+      sessions: [],
+    };
+  },
+  setEnabled(v) {
+    this.enabled = Boolean(v);
+  },
+  setCharacter(id) {
+    this.selectedId = id;
+  },
+  // 消息路径会调这三个：stub 必须照真实契约实现，否则发消息会 500（第一次就踩了）
+  prepare() {
+    return { prefix: null, reason: 'disabled' };
+  },
+  commit() {},
+  forget() {},
+};
+/** 让配对相关用例能切换「有局域网地址 / 只有回环」两种情况。 */
+let adminAddresses = {
+  loopbackOnly: false,
+  list: [{ ip: '192.168.1.247', url: 'http://192.168.1.247:8788', tailscale: false }],
+};
 
 /** 假 ACP：只实现 server.js 用到的几个方法。 */
 function makeFakeAcp() {
@@ -125,6 +170,11 @@ before(async () => {
     tts,
     settings,
     meta: { version: 'test-1.0.0', dshExe: 'X:\\fake.exe', defaultCwd: 'C:\\work' },
+    admin: {
+      listen: () => ({ host: '0.0.0.0', port: 8788 }),
+      addresses: () => adminAddresses,
+    },
+    fish: fakeFish,
   });
 
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -607,4 +657,118 @@ test('请求体不是 JSON 时 400，不发散成 500', async () => {
   const body = await res.json();
   assert.equal(body.code, 'request.invalid');
   assert.match(body.message ?? body.error, /JSON/);
+});
+
+// ── 扫码配对 ──────────────────────────────────────────────────────────────
+
+test('管理配对码：每个可达地址带一条二维码，载荷能解析回地址与码', async () => {
+  adminAddresses = {
+    loopbackOnly: false,
+    list: [
+      { ip: '192.168.1.247', url: 'http://192.168.1.247:8788', tailscale: false },
+      { ip: '100.101.102.103', url: 'http://100.101.102.103:8788', tailscale: true },
+    ],
+  };
+  try {
+    const res = await fetch(`${baseUrl}/admin/pair`, { method: 'POST' });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.ok, true);
+    assert.match(body.code, /^\d{6}$/);
+    assert.equal(body.urls.length, 2);
+    for (const u of body.urls) {
+      assert.deepEqual(parsePairPayload(u.payload), { url: u.url, code: body.code });
+      assert.equal(u.qr.size, 37);
+      assert.equal(u.qr.rows.length, 37);
+      assert.equal(u.qr.rows[0].length, 37);
+    }
+    assert.equal(body.urls[1].tailscale, true);
+    assert.equal(body.warn, undefined);
+  } finally {
+    adminAddresses = { loopbackOnly: false, list: [{ ip: '192.168.1.247', url: 'http://192.168.1.247:8788', tailscale: false }] };
+  }
+});
+
+test('管理配对码：只监听回环时给结构化警告，二维码为空但码仍可手动配对', async () => {
+  adminAddresses = { loopbackOnly: true, list: [] };
+  try {
+    const body = await (await fetch(`${baseUrl}/admin/pair`, { method: 'POST' })).json();
+    assert.equal(body.ok, true);
+    assert.deepEqual(body.urls, []);
+    assert.equal(body.warn.code, 'pair.loopback-only');
+    // 失败路径也要可行动：error 说清在哪失败，hint 说清下一步
+    assert.ok(body.warn.error.length > 0);
+    assert.match(body.warn.hint, /start-gateway\.bat|--listen/);
+
+    const paired = await (
+      await fetch(`${baseUrl}/v1/pair`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: body.code, deviceName: '手动配对' }),
+      })
+    ).json();
+    assert.equal(paired.ok, true, JSON.stringify(paired));
+  } finally {
+    adminAddresses = { loopbackOnly: false, list: [{ ip: '192.168.1.247', url: 'http://192.168.1.247:8788', tailscale: false }] };
+  }
+});
+
+// ── 手机端选鱼（/admin/persona） ─────────────────────────────────────────
+
+test('角色上下文：GET 给出可选角色与当前来源', async () => {
+  fakeFish.selectedId = null;
+  const body = await (await fetch(`${baseUrl}/admin/persona`)).json();
+  assert.equal(body.ok, true);
+  assert.equal(body.followingDesktop, true);
+  assert.equal(body.selectedId, null);
+  assert.deepEqual(body.characters.map((c) => c.id), ['char-1', 'char-2']);
+});
+
+test('角色上下文：PUT characterId 固定角色；null 恢复跟随桌面', async () => {
+  const pick = await (
+    await fetch(`${baseUrl}/admin/persona`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ characterId: 'char-2' }),
+    })
+  ).json();
+  assert.equal(pick.ok, true);
+  assert.equal(pick.selectedId, 'char-2');
+  assert.equal(pick.followingDesktop, false);
+  assert.equal(pick.character, '大肥鱼');
+
+  const back = await (
+    await fetch(`${baseUrl}/admin/persona`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ characterId: null }),
+    })
+  ).json();
+  assert.equal(back.selectedId, null);
+  assert.equal(back.followingDesktop, true);
+});
+
+test('角色上下文：两个字段都不给时 400 且 hint 说明怎么传', async () => {
+  const res = await fetch(`${baseUrl}/admin/persona`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+  assert.equal(res.status, 400);
+  const body = await res.json();
+  assert.equal(body.code, 'request.invalid');
+  assert.match(body.hint, /characterId/);
+});
+
+test('角色上下文：老的 {enabled:false} 写法仍然可用', async () => {
+  const body = await (
+    await fetch(`${baseUrl}/admin/persona`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: false }),
+    })
+  ).json();
+  assert.equal(body.ok, true);
+  assert.equal(body.enabled, false);
+  fakeFish.enabled = true; // 别影响其它用例
 });

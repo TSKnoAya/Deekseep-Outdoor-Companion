@@ -9,6 +9,7 @@
  */
 
 import { CODES, fail, toFailure, ok, requireThat } from '../../src/errors.js';
+import { startGateway, stopGateway, gatewayStatus } from './gateway-process.js';
 
 export const name = 'mobile-gateway';
 export const inject = ['webServer'];
@@ -78,37 +79,75 @@ async function callGateway(pathname, init = {}) {
 
 export function apply(ctx) {
   const disposers = [];
+  /** pathname → { GET: fn, PUT: fn }；DSH 的 webServer 按路径建路由，同路径重复注册会只剩一个方法。 */
+  const byPath = new Map();
 
   function route(method, pathname, handler) {
-    disposers.push(
-      ctx.webServer.register({
-        kind: 'exact',
-        path: pathname,
-        handler: async (req, res) => {
-          // 设置页在 DSH 自己的 web 界面里，天然是本机来源；仍然显式卡一道
-          if (!isLoopback(req)) return json(res, 403, { ok: false, error: '只接受本机访问' });
-          if (req.method !== method) return json(res, 405, { ok: false, error: '方法不对' });
-          try {
-            const out = await handler(req);
-            json(res, 200, ok(out));
-          } catch (e) {
-            const failure = toFailure(e);
-            json(res, Number.isInteger(e?.status) ? e.status : 200, failure);
-          }
-        },
-      }),
-    );
+    let table = byPath.get(pathname);
+    if (!table) {
+      table = Object.create(null);
+      byPath.set(pathname, table);
+      disposers.push(
+        ctx.webServer.register({
+          kind: 'exact',
+          path: pathname,
+          handler: async (req, res) => {
+            // 设置页在 DSH 自己的 web 界面里，天然是本机来源；仍然显式卡一道
+            if (!isLoopback(req)) return json(res, 403, { ok: false, error: '只接受本机访问' });
+            const fn = table[String(req.method ?? '').toUpperCase()];
+            if (!fn) return json(res, 405, { ok: false, error: '方法不对' });
+            try {
+              const out = await fn(req);
+              json(res, 200, ok(out));
+            } catch (e) {
+              const failure = toFailure(e);
+              json(res, Number.isInteger(e?.status) ? e.status : 200, failure);
+            }
+          },
+        }),
+      );
+    }
+    table[method] = handler;
   }
 
   route('GET', `${API}/status`, async () => {
-    const { status, body } = await callGateway('/admin/status');
-    if (status !== 200 || !body?.ok) {
-      // 网关没起来不算「插件坏了」：告诉设置页 running=false，它显示引导
-      throw fail('gateway.down', body?.error ?? '网关没在运行', {
-        hint: '双击手机网关目录里的 start-gateway.bat。',
+    const local = gatewayStatus();
+    try {
+      const { status, body } = await callGateway('/admin/status');
+      if (status === 200 && body?.ok) {
+        return { running: true, managed: local.managed, log: local.log, ...body };
+      }
+    } catch {
+      /* 网关没在跑是正常状态，不是错误：下面返回可行动的信息 */
+    }
+    return {
+      running: false,
+      managed: local.managed,
+      log: local.log,
+      lastError: local.lastError,
+      hint: '点「启动网关」即可（用的是和 start-gateway.bat 相同的参数），不用开命令行。',
+    };
+  });
+
+  /**
+   * 从设置页启动网关。
+   *
+   * 为什么放在插件宿主里做：网关是 DSH 之外的独立进程，但「用户按了一下按钮」
+   * 这件事只有 DSH 进程知道；让用户去双击 bat 等于把失败留给「他忘了开窗口」。
+   */
+  route('POST', `${API}/start`, async () => {
+    const result = await startGateway();
+    return { ...result, ...gatewayStatus() };
+  });
+
+  route('POST', `${API}/stop`, async () => {
+    const stopped = await stopGateway();
+    if (!stopped) {
+      throw fail('gateway.not-managed', '这个网关不是从 DSH 启动的，这里停不掉', {
+        hint: '双击 start-gateway.bat 起的网关，关掉那个黑窗口就行。',
       });
     }
-    return { running: true, ...body };
+    return { stopped: true, ...gatewayStatus() };
   });
 
   route('POST', `${API}/pair`, async () => {
@@ -137,12 +176,19 @@ export function apply(ctx) {
 
   route('PUT', `${API}/persona`, async (req) => {
     const payload = await readBody(req);
-    requireThat(typeof payload?.enabled === 'boolean', CODES.BAD_REQUEST, 'enabled 要传 true / false', {});
+    const hasEnabled = typeof payload?.enabled === 'boolean';
+    const hasCharacter = payload?.characterId === null || typeof payload?.characterId === 'string';
+    requireThat(hasEnabled || hasCharacter, CODES.BAD_REQUEST, 'enabled 或 characterId 至少要给一个', {
+      hint: 'characterId 传角色 id；null 表示跟随桌面当前角色。',
+    });
+    const patch = {};
+    if (hasEnabled) patch.enabled = payload.enabled;
+    if (hasCharacter) patch.characterId = payload.characterId;
     const { body } = await callGateway('/admin/persona', {
       method: 'PUT',
-      body: JSON.stringify({ enabled: payload.enabled }),
+      body: JSON.stringify(patch),
     });
-    if (!body?.ok) throw fail('gateway.error', body?.error ?? '改不动角色上下文开关', {});
+    if (!body?.ok) throw fail('gateway.error', body?.error ?? '改不动角色上下文设置', {});
     return body;
   });
 
@@ -204,4 +250,11 @@ export function apply(ctx) {
       }
     }
   }, 'mobile-gateway: api routes');
+
+  // DSH 退出/重载插件时，把「按钮启动的」网关一起收掉：
+  // 否则会留下一个没有窗口、用户在界面上也停不掉的隐藏进程。
+  // 手动用 start-gateway.bat 起的网关不受影响（它不是我们管的）。
+  ctx.effect?.(() => () => {
+    stopGateway().catch(() => {});
+  }, 'mobile-gateway: stop managed gateway');
 }

@@ -9,11 +9,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { buildFishContext, readCurrentCharacter } from '../src/fish-context.js';
+import { buildFishContext, fishSignature, listCharacters, readCurrentCharacter } from '../src/fish-context.js';
 
 const HOME = 'C:\\Users\\bob\\.dsh';
 const SURF = path.join(HOME, 'surfcore');
 const CHAR = path.join(SURF, 'characters', 'char-1');
+const CHAR2 = path.join(SURF, 'characters', 'char-2');
 
 function fakeFs(files = {}) {
   const map = new Map(Object.entries(files));
@@ -26,8 +27,30 @@ function fakeFs(files = {}) {
       }
       return map.get(p);
     },
+    statSync(p) {
+      if (!map.has(p)) {
+        const e = new Error('ENOENT');
+        e.code = 'ENOENT';
+        throw e;
+      }
+      const text = String(map.get(p));
+      return { mtimeMs: 1000 + text.length, size: text.length };
+    },
   };
 }
+
+const otherFiles = {
+  [path.join(SURF, 'characters', 'index.json')]: JSON.stringify({
+    version: 1,
+    currentId: 'char-1',
+    characters: [
+      { id: 'char-1', name: '傲娇助手', updatedAt: '2026-10-30T00:00:00.000Z', dir: CHAR },
+      { id: 'char-2', name: '大肥鱼', updatedAt: '2026-10-31T00:00:00.000Z', dir: CHAR2 },
+    ],
+  }),
+  [path.join(CHAR2, 'persona.md')]: '# 大肥鱼\n- 性格：懒、贪吃',
+  [path.join(CHAR2, 'memory', 'memory-card-prompt-qq.md')]: '【记忆卡】\n- 2026-10-31 主人带我去看海',
+};
 
 const baseFiles = {
   [path.join(SURF, 'characters', 'current.json')]: JSON.stringify({ id: 'char-1', name: '傲娇助手', dir: CHAR }),
@@ -105,4 +128,52 @@ test('没配置角色时 ok:false / no-character', () => {
   const r = buildFishContext({ dshHome: HOME, fsLike: fakeFs({}) });
   assert.equal(r.ok, false);
   assert.equal(r.reason, 'no-character');
+});
+
+// ── 手机端选鱼（多角色） ────────────────────────────────────────────────
+
+test('能列出本机所有角色，按更新时间倒序', () => {
+  const list = listCharacters(SURF, fakeFs(otherFiles));
+  assert.deepEqual(list.map((c) => c.id), ['char-2', 'char-1']);
+  assert.equal(list[0].name, '大肥鱼');
+});
+
+test('index.json 缺失时退回扫目录（以 character.json 为准）', () => {
+  const files = {
+    [path.join(SURF, 'characters', 'char-1', 'character.json')]: JSON.stringify({ id: 'char-1', name: '傲娇助手' }),
+  };
+  const fsLike = {
+    readFileSync: fakeFs(files).readFileSync,
+    readdirSync: () => ['char-1'],
+  };
+  const list = listCharacters(SURF, fsLike);
+  assert.deepEqual(list.map((c) => c.id), ['char-1']);
+});
+
+test('指定角色时读它的文件，而不是桌面当前角色', () => {
+  const fsLike = fakeFs({ ...baseFiles, ...otherFiles });
+  const r = buildFishContext({ dshHome: HOME, characterId: 'char-2', fsLike });
+  assert.equal(r.ok, true);
+  assert.equal(r.id, 'char-2');
+  assert.equal(r.name, '大肥鱼');
+  assert.match(r.text, /懒、贪吃/);
+  assert.match(r.text, /主人带我去看海/);
+  assert.doesNotMatch(r.text, /傲娇、嘴硬心软/);
+  assert.equal(r.selectionMissing, false);
+});
+
+test('指定的角色不存在时退回桌面当前角色，并明确标记 selectionMissing', () => {
+  const fsLike = fakeFs({ ...baseFiles, ...otherFiles });
+  const r = buildFishContext({ dshHome: HOME, characterId: 'char-gone', fsLike });
+  assert.equal(r.ok, true);
+  assert.equal(r.id, 'char-1', '不能拿一个不存在的角色目录去拼');
+  assert.equal(r.selectionMissing, true);
+});
+
+test('签名随角色变化（切鱼后能触发重新注入）', () => {
+  const fsLike = fakeFs({ ...baseFiles, ...otherFiles });
+  const a = fishSignature({ dshHome: HOME, characterId: 'char-1', fsLike });
+  const b = fishSignature({ dshHome: HOME, characterId: 'char-2', fsLike });
+  assert.ok(a.length > 0 && b.length > 0);
+  assert.notEqual(a, b);
 });

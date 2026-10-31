@@ -1,5 +1,16 @@
 # 第三方素材署名 / Third-party notices
 
+## 代码依赖（随仓库 / APK 分发）
+
+| 组件 | 位置 | 许可 | 用途 |
+| --- | --- | --- | --- |
+| qrcode-generator 1.4.4（Kazuhiko Arase） | `src/vendor/qrcode-generator.cjs` | **MIT**（版权声明保留在文件头） | 网关生成配对二维码矩阵 |
+| ZXing core 3.5.3 | Gradle 依赖 `com.google.zxing:core` | Apache-2.0 | 手机端二维码解码 |
+| AndroidX CameraX 1.3.4 | Gradle 依赖 `androidx.camera:*` | Apache-2.0 | 相机预览与取帧 |
+
+> 注意：`qrcode-generator.cjs` **不能改名成 `.js`** —— 本包是 `"type": "module"`，
+> 改名后 Node 会按 ESM 解析，UMD 的 `module.exports` 分支不执行，导入会直接失败。
+
 本项目**代码**为 MIT。但 `android/app/src/main/res/drawable-nodpi/skin_*.webp` 这几张图
 **不是代码**，它们来自第三方 DSH 皮肤包，许可是 **CC BY-NC-SA 4.0**。
 

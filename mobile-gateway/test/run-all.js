@@ -29,7 +29,10 @@ const FILES = [
   'errors-audio.test.js',
   'fish-context.test.js',
   'fish-inject.test.js',
+  'gateway-process.test.js',
+  'pair-qr.test.js',
   'paths.test.js',
+  'plugin-routes.test.js',
   'server.test.js',
   'session-meta.test.js',
 ];
