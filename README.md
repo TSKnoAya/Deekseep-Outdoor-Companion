@@ -18,6 +18,30 @@
 
 ---
 
+## 关于本仓库：一个基于 SurfCore 的手机网关扩展
+
+本仓库以 [SurfCore](https://github.com/Mieksido/surfcore) 为基础，主要新增了 [`mobile-gateway/`](mobile-gateway/)：
+把养鱼插件里的**角色人格与记忆**带到手机上（本机网关 + Android App），SurfCore 原有的 QQ / B站 / 桌宠能力保持不变。
+
+需要说清楚的一点：**`mobile-gateway` 本身不提供养鱼功能**。它不自带角色、不自带记忆，
+所有「鱼」都来自正在运行的养鱼插件 —— **至少要装一款**，否则手机端只是一个普通助手。
+当前适配的是 SurfCore：网关读的是它的角色目录（`~/.dsh/surfcore/characters/` 下的
+`current.json`、`persona.md`、`memory-card-prompt-*.md`），支持自动跟随桌面当前角色，也支持在手机端固定选一条。
+
+我们希望把这层适配做成通用的：
+
+- 欢迎更多「养大肥鱼」类插件的作者一起做兼容。重点是把 [`mobile-gateway/src/fish-context.js`](mobile-gateway/src/fish-context.js)
+  里「读哪个角色、读哪份记忆」抽成适配层；注入策略（首轮注入、记忆变更后再注入、每会话上限、手机固定选鱼）
+  与具体插件无关，可以直接复用。
+- 你的插件如果角色/记忆目录结构不同，欢迎开 Issue 描述格式，或直接提 PR 加一个 adapter。
+- 目标：手机端只依赖「一款养鱼插件」，而不依赖某个特定品牌。
+
+上游与许可：SurfCore（[Mieksido/surfcore](https://github.com/Mieksido/surfcore)）· 更上游 qq-bridge / QSH（Derpyu520 等）；
+具体条款见 [LICENSE](LICENSE)（MIT）。手机网关用到的第三方素材与代码依赖署名见
+[mobile-gateway/THIRD_PARTY_NOTICES.md](mobile-gateway/THIRD_PARTY_NOTICES.md)。
+
+---
+
 ## 让 DSH 自己装（也可以只发一条链接）
 
 把这句话发给 DSH：
