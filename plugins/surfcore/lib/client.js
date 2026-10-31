@@ -1354,7 +1354,7 @@ F("toolsPath", "bili.mjs 路径", "留空 = 用合体插件自带的 tools/", "t
                   toast("✓ 诊断信息已复制");
                 } catch (e) { toast(`✗ 复制失败：${e.message}`); }
               } }, "复制诊断"),
-              h(Btn, { kind: "qbw-btn2", onClick: () => window.open("https://github.com/Mieksido/surfcore/releases/latest", "_blank", "noopener") }, "去下载新版")));
+              h(Btn, { kind: "qbw-btn2", onClick: () => window.open("https://github.com/TSKnoAya/Deekseep-Outdoor-Companion/releases/latest", "_blank", "noopener") }, "去下载新版")));
           })(),
           working ? h(ProgressBar, { phase: "正在下载/应用更新…", indeterminate: true }) : null),
           h("div", { className: "qbw-actions", style: { flexShrink: 0, paddingTop: "10px" } },
@@ -1877,7 +1877,7 @@ F("toolsPath", "bili.mjs 路径", "留空 = 用合体插件自带的 tools/", "t
                   },
                 }, busy === "apply-update" ? "更新中…" : `立即更新（${(updates.pending ?? []).length}）`)
                   : (updates.lastApply?.deterministic
-                    ? h(Btn, { onClick: () => window.open("https://github.com/Mieksido/surfcore/releases/latest", "_blank", "noopener") },
+                    ? h(Btn, { onClick: () => window.open("https://github.com/TSKnoAya/Deekseep-Outdoor-Companion/releases/latest", "_blank", "noopener") },
                       "此版本无法自动更新：手动下载")
                     : null),
               h(Btn, { kind: "qbw-btn2", onClick: () => setUpdateOpen(true), disabled: !(updates.results ?? []).length }, "查看详情"))),

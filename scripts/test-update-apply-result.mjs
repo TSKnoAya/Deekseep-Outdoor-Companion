@@ -77,7 +77,7 @@ try {
   const mkService = (dir, extra = {}) => createUpdatesService({
     stateDir: path.join(dir, '.state'),
     components: () => [{
-      id: 'surfcore', name: 'SurfCore 本体', dir, kind: 'version', versionRepo: 'Mieksido/surfcore-test',
+      id: 'surfcore', name: 'SurfCore 本体', dir, kind: 'version', versionRepo: 'TSKnoAya/Deekseep-Outdoor-Companion-test',
       archiveUrl: 'https://example.com/archive/main.zip', ...extra,
     }],
     pluginLog: () => {},
@@ -217,7 +217,7 @@ try {
     const restore = stubFetch(async (u) => {
       if (u.includes('codeload.github.com')) { seen.push(u); return new Response('down', { status: 500 }); }
       if (u.includes('/archive/refs/tags/')) { seen.push(u); return new Response(ZIP, { status: 200 }); }
-      if (u.includes('/releases/latest')) return new Response(null, { status: 302, headers: { location: 'https://github.com/Mieksido/surfcore-test/releases/tag/v0.7.0' } });
+      if (u.includes('/releases/latest')) return new Response(null, { status: 302, headers: { location: 'https://github.com/TSKnoAya/Deekseep-Outdoor-Companion-test/releases/tag/v0.7.0' } });
       return undefined;
     });
     process.env.SURFCORE_UPDATE_NO_SPAWN = '1';
@@ -226,7 +226,7 @@ try {
       const r = await svc.apply(['surfcore']);
       ok(r.results[0].ok === true, 'codeload 失败后换归档成功', JSON.stringify(r.results[0]));
       ok(seen[0].includes('codeload.github.com'), '首先尝试 codeload 直连', seen[0] || '');
-      ok(seen.some((u) => u.includes('github.com/Mieksido') && u.includes('/archive/')), '失败后回退 github 归档', seen.join(' | '));
+      ok(seen.some((u) => !u.includes('codeload') && u.includes('/archive/refs/tags/')), '失败后回退 github 归档', seen.join(' | '));
     } finally { restore(); delete process.env.SURFCORE_UPDATE_NO_SPAWN; }
   }
 
@@ -259,7 +259,7 @@ try {
     const seen = [];
     const restore = stubFetch(async (u) => {
       if (u.includes('/releases/latest')) {
-        return new Response(null, { status: 302, headers: { location: 'https://github.com/Mieksido/surfcore-test/releases/tag/v0.7.0' } });
+        return new Response(null, { status: 302, headers: { location: 'https://github.com/TSKnoAya/Deekseep-Outdoor-Companion-test/releases/tag/v0.7.0' } });
       }
       if (u.includes('/zip/') || u.includes('/archive/')) { seen.push(u); return new Response(ZIP, { status: 200 }); }
       return undefined;
