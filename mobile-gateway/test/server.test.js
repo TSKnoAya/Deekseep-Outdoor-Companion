@@ -94,7 +94,10 @@ function makeFakeAcp() {
     serverInfo: { name: 'fake-acp', version: '9.9.9' },
     onPermissionRequest: null,
     async listSessions() {
-      return [{ sessionId: 'sess-1', cwd: 'C:\\work' }];
+      return [
+        { sessionId: 'sess-1', cwd: 'C:\\work' },
+        { sessionId: 'sess-empty', cwd: 'C:\\work' },
+      ];
     },
     async newSession({ cwd }) {
       if (cwd === 'FAIL') throw Object.assign(new Error('目录不存在'), { code: 'internal.error', hint: '换个目录', userFacing: true });
@@ -186,6 +189,14 @@ before(async () => {
     },
     fish: fakeFish,
     dshArchive: fakeDshArchive,
+    // 假会话元数据：sess-1 有用户消息（有标题），sess-empty 没有任何消息
+    sessionMeta: {
+      enrich(list) {
+        return list.map((s) => (s.sessionId === 'sess-1'
+          ? { ...s, title: '测试会话', updatedAt: 2 }
+          : { ...s, title: null, updatedAt: 1 }));
+      },
+    },
   });
 
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -261,10 +272,14 @@ test('配对成功后列表能查到设备，且不返回令牌哈希', async ()
   assert.ok(body.devices.some((d) => d.name === '红米 K80'));
 });
 
-test('会话列表透传 ACP', async () => {
+test('会话列表透传 ACP（空会话默认不出现，和 DSH 一致）', async () => {
   const { api } = await pairAndAuth();
   const body = await (await api('/v1/sessions')).json();
-  assert.deepEqual(body.sessions, [{ sessionId: 'sess-1', cwd: 'C:\\work', archived: false }]);
+  assert.deepEqual(body.sessions, [
+    { sessionId: 'sess-1', cwd: 'C:\\work', title: '测试会话', updatedAt: 2, archived: false },
+  ]);
+  const all = await (await api('/v1/sessions?includeEmpty=1')).json();
+  assert.equal(all.sessions.some((s) => s.sessionId === 'sess-empty'), true, 'includeEmpty=1 时才带空会话');
 });
 
 test('新建会话失败时，状态码与 code/hint 都要正确', async () => {

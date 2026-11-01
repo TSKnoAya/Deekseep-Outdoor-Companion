@@ -326,7 +326,14 @@ export function createGatewayServer(deps) {
       archived: Boolean(deps.dshArchive?.has?.(s.sessionId)),
     }));
     const includeArchived = new URL(req.url, 'http://localhost').searchParams.get('includeArchived') === '1';
-    sendJson(res, ok({ sessions: includeArchived ? withFlags : withFlags.filter((s) => !s.archived) }));
+    const includeEmpty = new URL(req.url, 'http://localhost').searchParams.get('includeEmpty') === '1';
+    const visible = withFlags.filter((s) => {
+      if (!includeArchived && s.archived) return false;
+      // DSH 桌面端不显示没有任何消息的会话；手机保持一致（否则列表里会多出「（空会话）」）
+      if (!includeEmpty && deps.sessionMeta && !s.title) return false;
+      return true;
+    });
+    sendJson(res, ok({ sessions: visible }));
   }
 
   async function handleCreateSession(req, res) {

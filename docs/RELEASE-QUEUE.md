@@ -22,11 +22,13 @@
 - 网关：新增 `src/dsh-archive.js`，**只读** DSH 的 `~/.dsh/storages/workspace.json`
   → `global.archivedSessionIds`（mtime+size 缓存，DSH 保存后自动生效；坏档沿用上次结果）。
 - `GET /v1/sessions` 默认过滤 DSH 已归档的会话（`?includeArchived=1` 才返回并带 `archived:true`）。
+- `GET /v1/sessions` 同时默认过滤「没有任何用户消息」的空会话（`?includeEmpty=1` 调试用），
+  与 DSH 桌面端列表保持一致（原来手机会多出两条「（空会话）」）。
 - 撤回 §25 的手机侧独立归档：删除 `session-archive.js`、`POST /v1/sessions/:id/archive|unarchive`
   以及 App 的归档/恢复按钮与「显示已归档」开关。
 - 归档/取消归档统一在 DSH 桌面端做；手机只跟随，不反向写 DSH 状态（跨进程写无锁，风险大）。
 
-**case**：[mobile-gateway/docs/cases/2026-10-30-dsh-mobile-app.md](../mobile-gateway/docs/cases/2026-10-30-dsh-mobile-app.md) §26（§25 已被取代）
+**case**：[mobile-gateway/docs/cases/2026-10-30-dsh-mobile-app.md](../mobile-gateway/docs/cases/2026-10-30-dsh-mobile-app.md) §26（归档）、§27（空会话）
 
 **验证**：`node test/run-all.js` 202/202；`gradle assembleDebug` 成功并已装真机；
 未验证：真机下拉点击手感。
