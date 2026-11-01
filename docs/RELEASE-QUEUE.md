@@ -11,6 +11,175 @@
 
 ## 待发布
 
+### 批次 2026-11-01 22:25 · 手机网关：会话归档（只从手机隐藏）
+<!-- release-batch: start=2026-11-01T22:05+08:00 end=2026-11-01T22:25+08:00 commits=待提交 -->
+
+**覆盖提交**：本次编辑会话尚未提交
+**建议**：与手机网关前几批一起 minor（0.2.x）
+
+**改了什么**
+
+- 网关：新增 `src/session-archive.js`（归档名单持久化到 `<stateDir>/archived-sessions.json`，
+  写盘失败回滚内存）；`GET /v1/sessions` 每条带 `archived`；
+  新增 `POST /v1/sessions/:id/archive` 与 `/unarchive`。
+- App：会话下拉每行增加「归档/恢复」按钮；底部「显示已归档（N）」可展开并逐条恢复；
+  归档只影响这台手机，桌面端不受影响。
+- 明确不做「删除文件」：列表包含桌面会话，删文件会波及电脑。
+
+**case**：[mobile-gateway/docs/cases/2026-10-30-dsh-mobile-app.md](../mobile-gateway/docs/cases/2026-10-30-dsh-mobile-app.md) §25
+
+**验证**：`node test/run-all.js` 202/202；`gradle assembleDebug` 成功并已装真机；
+未验证：真机下拉点击手感。
+
+**发布交接**（可直接转给发布会话）：
+
+```
+改了哪些文件：
+  mobile-gateway/src/{session-archive.js（新）, server.js, main.js}
+  mobile-gateway/test/{session-archive.test.js（新）, server.test.js, run-all.js}
+  mobile-gateway/android/.../{GatewayClient.kt, ChatViewModel.kt, ChatScreen.kt}
+  docs（HANDOFF、cases §25、RELEASE-QUEUE）
+测过什么、结果如何：node 202/202；assembleDebug 成功；APK 已装红米 K80
+建议：minor（与手机网关前几批同批）
+case：mobile-gateway/docs/cases/2026-10-30-dsh-mobile-app.md §25
+改动层级：接口层新增 archived 字段与两个 POST（旧客户端忽略新字段，兼容）
+完整逻辑与爆炸半径：case §25.3–25.5（只写一个 json，不碰会话文件）
+失败路径：case §25.8（写盘失败/旧网关/离线，App 均显示红条）
+没验证：真机归档按钮的点击手感
+```
+
+---
+
+### 批次 2026-10-31 20:10 · 手机网关：手机独立选鱼（多角色）
+<!-- release-batch: start=2026-10-31T20:05+08:00 end=2026-10-31T20:10+08:00 commits=待提交 -->
+
+**覆盖提交**：编辑会话尚未提交（与扫码配对/启动按钮同一批未提交改动）
+**建议**：与前面两批一起发 minor（手机网关 0.2.0）
+
+**改了什么**
+
+- `fish-context.js`：新增 `listCharacters()`；`resolveFishFiles` 接受 `characterId`，
+  指定角色缺失时回退桌面当前并标记 `selectionMissing`。
+- `fish-inject.js`：`selectedId`（null=跟随桌面）、`setCharacter()` 落盘、状态带 `characters/followingDesktop`；
+  切角色触发 `character-switched` 强制重注入（不受上限限制）。
+- `server.js`：`PUT /admin/persona` 接受 `enabled` 和/或 `characterId`（null=跟随桌面）；旧写法兼容。
+- 插件：`PUT /api/persona` 透传两字段；④ 卡片在多角色时出现下拉，单选/删除角色的提示都在。
+- 修：插件同路径 GET+PUT 各注册一次 → DSH 只保留一个方法，点「开启」/「保存并生效」返回
+  「方法不对」405。改为每路径注册一次、内部按 method 分发（case §24，含 `test/plugin-routes.test.js`）。
+- 配置新增键：`config.json.personaCharacterId`；环境变量 `DSH_MOBILE_PERSONA_CHARACTER` 可覆盖。
+
+**case**：[mobile-gateway/docs/cases/2026-10-30-dsh-mobile-app.md](../mobile-gateway/docs/cases/2026-10-30-dsh-mobile-app.md) §23
+
+**验证**：`node test/run-all.js` 187/187（+13）；真实数据只读 GET 正常；
+未验证：两条鱼之间的界面切换（本机仅 1 条）。
+
+**发布交接**（可直接转给发布会话）：
+
+```
+改了哪些文件：
+  mobile-gateway/src/{fish-context.js, fish-inject.js, server.js, main.js}
+  mobile-gateway/dsh-plugin/lib/{index.js, client.js}
+  mobile-gateway/test/{fish-context.test.js, fish-inject.test.js, server.test.js}
+  docs（HANDOFF、cases §23、RELEASE-QUEUE）
+测过什么、结果如何：node 187/187；真实 SurfCore 只读 GET 返回 characters=[大肥鱼]、followingDesktop=true
+建议：minor（与扫码配对/启动按钮同批）
+case：mobile-gateway/docs/cases/2026-10-30-dsh-mobile-app.md §23
+改动层级：接口层新增可选字段（/admin/persona 的 characterId、status 的 characters/selectedId…），旧字段兼容
+完整逻辑与爆炸半径：case §23.3–23.5（只写 config.json 一个键；不写 SurfCore 文件）
+失败路径：case §23.8（角色被删/无角色/参数缺失/宿主旧版，均有界面提示）
+没验证：两条鱼之间实际切换的语气变化（本机只有 1 条鱼，选择器按设计不显示）
+```
+
+---
+
+### 批次 2026-10-31 20:05 · 手机网关：设置页一键启动/停止网关
+<!-- release-batch: start=2026-10-31T19:45+08:00 end=2026-10-31T20:05+08:00 commits=待提交 -->
+
+**覆盖提交**：编辑会话尚未提交（与下面扫码配对同一批未提交改动）
+**建议**：与扫码配对一起发；同属 minor（手机网关 0.2.0）
+
+**改了什么**
+
+- 新增 `dsh-plugin/lib/gateway-process.js`：node 探测（DSH 自带 → LocalAppData → ProgramFiles → Electron 兜底）、
+  spawn `src/main.js --listen 0.0.0.0:8788 --pair`、12 秒健康检查、日志 `<DSH_HOME>/mobile-gateway/gateway.log`、
+  `taskkill /T /F` 停整棵进程树。
+- 插件接口：`/status` 网关没跑时返回 `running:false`（不再当错误）+ `managed/log/lastError`；
+  新增 `POST /start`、`POST /stop`。
+- 设置页 ① 卡片：右上角「启动网关」/「停止网关」；失败红块带原因、日志尾部与日志路径。
+- 生命周期：按钮启动的网关随 DSH 退出停止；bat 起的不受影响（卡片会注明）。
+
+**case**：[mobile-gateway/docs/cases/2026-10-30-dsh-mobile-app.md](../mobile-gateway/docs/cases/2026-10-30-dsh-mobile-app.md) §21
+
+**验证**：`node test/run-all.js` 174/174（新增 3 条，含失败分支 code/hint/日志断言）；
+真实 `main.js` 8791 端口 325ms 起、stop 后释放。
+
+**发布交接**（可直接转给发布会话）：
+
+```
+改了哪些文件：
+  mobile-gateway/dsh-plugin/lib/gateway-process.js（新）
+  mobile-gateway/dsh-plugin/lib/index.js（/status 改造 + /start + /stop + 退出清理）
+  mobile-gateway/dsh-plugin/lib/client.js（①卡片启动/停止按钮、失败红块）
+  mobile-gateway/test/gateway-process.test.js（新）、test/run-all.js
+  docs（DESIGN §3.2、HANDOFF、PITFALLS×2、cases §21、RELEASE-QUEUE）
+测过什么、结果如何：node 174/174；真实网关 spawn/stop 在 8791 端口验证通过（325ms up）
+建议：minor（与扫码配对同批）
+case：mobile-gateway/docs/cases/2026-10-30-dsh-mobile-app.md §21
+改动层级：插件宿主接口新增 /start /stop，/status 从「抛错」改为返回 running:false（后端兼容；前端同版本发布）
+完整逻辑与爆炸半径：case §21.2–21.4（3 个进程；写 gateway.log；只接受本机回环）
+失败路径：case §21.8（端口占用/秒退/超时/无 node/无源码/bat 起的停不掉，均有红块+下一步）
+没验证：DSH 设置页里手点按钮（需重启 DSH）；ELECTRON_RUN_AS_NODE 兜底路径
+```
+
+---
+
+### 批次 2026-10-31 19:40 · 手机网关：扫码配对（保留手动输入）
+<!-- release-batch: start=2026-10-31T19:10+08:00 end=2026-10-31T19:40+08:00 commits=待提交 -->
+
+**覆盖提交**：编辑会话尚未提交（用户未要求本地提交；发布前先按仓库习惯提交，再取 HEAD）
+**建议**：minor → 手机网关 / App **0.2.0**（新增功能，`/v1/pair`、`/admin/pair` 旧字段全部保留）
+
+**改了什么**
+
+- 网关：新增 `src/pair-qr.js`（载荷 + 矩阵）、`src/vendor/qrcode-generator.cjs`（MIT）；
+  `POST /admin/pair` 额外返回 `urls[{url,payload,qr{size,rows},tailscale}]`，
+  回环/无地址/生成失败时返回 `warn{code,error,hint}`（码本身照常有效）。
+- 设置页：② 卡片改为「生成二维码 / 配对码」，内联 SVG 画二维码、多地址切换、倒计时与警示。
+- App：配对页新增「扫码配对」（CameraX + ZXing core，无 GMS 依赖）；
+  注册 `dshmobile://pair` 深链；解析器 `pair/PairPayload.kt`；新增 CAMERA 权限。
+- 修：扫码页把 Compose 取消异常误报成「相机打不开」——PreviewView 改 `AtomicReference`、
+  放行 `CancellationException`（case §22）。
+- APK 17.86MB → 20.70MB（CameraX + ZXing）。
+
+**case**：[mobile-gateway/docs/cases/2026-10-30-dsh-mobile-app.md](../mobile-gateway/docs/cases/2026-10-30-dsh-mobile-app.md) §20
+
+**验证**：`node test/run-all.js` 171/171；`gradle testDebugUnitTest` 5/5；`gradle assembleDebug` 成功；
+jsQR 独立解码矩阵与插件 SVG 路径均通过。
+
+**发布交接**（可直接转给发布会话）：
+
+```
+改了哪些文件：
+  mobile-gateway/src/pair-qr.js（新）、src/vendor/qrcode-generator.cjs（新，MIT）
+  mobile-gateway/src/server.js（/admin/pair 返回 urls + warn）
+  mobile-gateway/dsh-plugin/lib/client.js（②卡片二维码）
+  mobile-gateway/android/{app/build.gradle.kts, app/src/main/AndroidManifest.xml,
+    .../MainActivity.kt, .../ui/ChatScreen.kt, .../ui/ChatViewModel.kt,
+    .../ui/QrScanScreen.kt（新）, .../pair/PairPayload.kt（新）,
+    app/src/test/.../PairPayloadTest.kt（新）}
+  mobile-gateway/test/{pair-qr.test.js（新）, server.test.js, run-all.js}
+  docs（DESIGN/THIRD_PARTY_NOTICES/cases §20/HANDOFF/PITFALLS/RELEASE-QUEUE）
+测过什么、结果如何：node 171/171；Kotlin 单测 5/5；assembleDebug 成功（20.7MB）；jsQR 独立解码通过
+建议：minor（手机网关/App 0.2.0）
+case：mobile-gateway/docs/cases/2026-10-30-dsh-mobile-app.md §20
+改动层级：接口层新增字段（/admin/pair 的 urls/warn），/v1/* 完全未改 → 向后兼容
+完整逻辑与爆炸半径：case §20.2–20.4（3 个进程；二维码只含一次性 5 分钟配对码；APK +2.8MB）
+失败路径：case §20.8（回环/无地址/生成失败/扫到普通码/相机权限/相机占用，全部有界面提示与下一步）
+没验证：真机拿手机扫电脑屏幕、HyperOS 深链弹窗、多地址切换观感
+```
+
+---
+
 ### 批次 2026-10-31 10:20 · Phase 0A 上下文/成本遥测（只测量）
 <!-- release-batch: start=2026-10-31T10:20+08:00 end=2026-10-31T10:40+08:00 commits=c7df162 -->
 

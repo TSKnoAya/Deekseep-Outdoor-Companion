@@ -111,6 +111,12 @@ export function createGatewayServer(deps) {
     const closeMatch = pathname.match(/^\/v1\/sessions\/([^/]+)\/close$/);
     if (closeMatch && req.method === 'POST') return handleCloseSession(req, res, decodeURIComponent(closeMatch[1]));
 
+    // 「归档」只在手机列表里隐藏，不动会话文件；桌面端不受影响
+    const archiveMatch = pathname.match(/^\/v1\/sessions\/([^/]+)\/(archive|unarchive)$/);
+    if (archiveMatch && req.method === 'POST') {
+      return handleArchiveSession(req, res, decodeURIComponent(archiveMatch[1]), archiveMatch[2] === 'archive');
+    }
+
     if (pathname === '/v1/approvals' && req.method === 'GET') return handleListApprovals(req, res, url);
 
     const approveMatch = pathname.match(/^\/v1\/approvals\/([^/]+)$/);
@@ -320,7 +326,27 @@ export function createGatewayServer(deps) {
     // 补标题与最后活动时间，并按时间倒序：手机上的列表才认得出来
     const enriched = deps.sessionMeta ? deps.sessionMeta.enrich(sessions) : sessions;
     enriched.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
-    sendJson(res, ok({ sessions: enriched }));
+    // 归档标记：App 默认过滤掉，但接口仍返回（这样「已归档」里能恢复）
+    const withFlags = enriched.map((s) => ({
+      ...s,
+      archived: Boolean(deps.archive?.has?.(s.sessionId)),
+    }));
+    sendJson(res, ok({ sessions: withFlags }));
+  }
+
+  /**
+   * 归档 / 取消归档（手机侧隐藏）。**不删文件**：
+   * 手机列表里混着桌面会话，删掉会波及电脑；隐藏的代价最小。
+   */
+  function handleArchiveSession(req, res, sessionId, hidden) {
+    requireThat(Boolean(deps.archive), CODES.BAD_REQUEST, '这个网关版本没接会话归档', {
+      hint: '升级并重启网关后再试。',
+    });
+    const okWritten = hidden ? deps.archive.archive(sessionId) : deps.archive.unarchive(sessionId);
+    requireThat(okWritten, CODES.BAD_REQUEST, '会话 id 不合法，或归档名单写不进去', {
+      hint: '会话 id 应来自 GET /v1/sessions；如果写盘失败，看网关窗口里的日志。',
+    });
+    sendJson(res, ok({ sessionId, archived: hidden }));
   }
 
   async function handleCreateSession(req, res) {

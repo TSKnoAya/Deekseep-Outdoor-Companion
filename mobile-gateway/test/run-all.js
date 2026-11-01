@@ -34,6 +34,7 @@ const FILES = [
   'paths.test.js',
   'plugin-routes.test.js',
   'server.test.js',
+  'session-archive.test.js',
   'session-meta.test.js',
 ];
 

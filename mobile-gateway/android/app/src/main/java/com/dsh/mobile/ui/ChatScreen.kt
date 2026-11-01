@@ -28,12 +28,14 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Unarchive
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -144,11 +146,16 @@ fun ChatScreen(state: AppState, vm: ChatViewModel) {
                             expanded = showSessions,
                             onDismissRequest = { showSessions = false },
                         ) {
-                            if (state.sessions.isEmpty()) {
+                            val archivedCount = state.sessions.count { it.archived }
+                            val visible = state.sessions
+                                .filter { state.showArchived || !it.archived }
+                                .take(15)
+                            if (visible.isEmpty()) {
                                 DropdownMenuItem(
                                     text = {
                                         Text(
-                                            "还没有历史会话",
+                                            if (state.sessions.isEmpty()) "还没有历史会话"
+                                            else "都归档了；点下面的「显示已归档」可以恢复",
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         )
@@ -156,7 +163,7 @@ fun ChatScreen(state: AppState, vm: ChatViewModel) {
                                     onClick = { showSessions = false },
                                 )
                             }
-                            state.sessions.take(15).forEach { s ->
+                            visible.forEach { s ->
                                 val current = s.sessionId == state.currentSessionId
                                 DropdownMenuItem(
                                     text = {
@@ -166,19 +173,57 @@ fun ChatScreen(state: AppState, vm: ChatViewModel) {
                                                 style = MaterialTheme.typography.bodyMedium,
                                                 maxLines = 1,
                                                 overflow = TextOverflow.Ellipsis,
-                                                color = if (current) MaterialTheme.colorScheme.primary else Color.Unspecified,
+                                                color = when {
+                                                    current -> MaterialTheme.colorScheme.primary
+                                                    s.archived -> MaterialTheme.colorScheme.onSurfaceVariant
+                                                    else -> Color.Unspecified
+                                                },
                                             )
                                             Text(
-                                                if (current) "${relativeTime(s.updatedAt)} · 当前" else relativeTime(s.updatedAt),
+                                                buildString {
+                                                    if (current) append("${relativeTime(s.updatedAt)} · 当前")
+                                                    else append(relativeTime(s.updatedAt))
+                                                    // 归档只影响手机列表，桌面端照常
+                                                    if (s.archived) append(" · 已归档")
+                                                },
                                                 style = MaterialTheme.typography.bodySmall,
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                             )
                                         }
                                     },
+                                        trailingIcon = {
+                                            // 归档 = 只从这台手机的列表里隐藏，不删会话文件
+                                            IconButton(
+                                                onClick = {
+                                                    if (s.archived) vm.unarchiveSession(s.sessionId)
+                                                    else vm.archiveSession(s.sessionId)
+                                                },
+                                            ) {
+                                                Icon(
+                                                    if (s.archived) Icons.Default.Unarchive else Icons.Default.Archive,
+                                                    contentDescription = if (s.archived) "恢复" else "归档（仅从手机隐藏）",
+                                                    modifier = Modifier.size(18.dp),
+                                                )
+                                            }
+                                        },
                                     onClick = {
                                         showSessions = false
                                         if (!current) vm.openSession(s.sessionId)
                                     },
+                                )
+                            }
+                            if (archivedCount > 0) {
+                                HorizontalDivider()
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            if (state.showArchived) "隐藏已归档（$archivedCount）" else "显示已归档（$archivedCount）",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    },
+                                    // 只切换显示，不关菜单——用户可以当场恢复某一条
+                                    onClick = { vm.toggleShowArchived() },
                                 )
                             }
                         }
