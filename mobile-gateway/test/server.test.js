@@ -132,6 +132,10 @@ function makeFakeAcp() {
     },
     async cancel() {},
     async closeSession() {},
+    async resumeSession(sessionId) {
+      this.resumed = sessionId;
+      return { sessionId };
+    },
     answerPermission(rpcId, optionId) {
       // 记录一下，供断言
       this.lastAnswer = { rpcId, optionId };
@@ -854,3 +858,5 @@ test('会话历史：返回已有对话；接口要鉴权', async () => {
   const anon = await fetch(`${baseUrl}/v1/sessions/sess-1/history`);
   assert.equal(anon.status, 401);
 });
+
+// ── 会话结束 ────────────────────────────────────────────────────────────

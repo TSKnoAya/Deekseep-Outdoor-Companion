@@ -1692,3 +1692,33 @@ DSH 启动后侧栏出现「手机网关」分组，点开能看到「你是金�
 - 以后手机新建的会话仍进 `default-workspace`（`defaultCwd` 配置），不会长在「手机网关」组；
   想让它们都归到「手机网关」，把 `defaultCwd` 指到该目录即可。
 - 侧栏预览规则是 DSH 的 UI 行为，手机保持平铺，不跟随。
+
+## 31. 2026-11-02 01:40 想让手机新建的会话立刻出现在 DSH：两条捷径都不成立
+
+### 31.1 目标
+
+手机建会话/发消息后，DSH 侧栏立刻出现对应会话，两边同源。
+
+### 31.2 实测（都是真桌面 DSH）
+
+| 尝试 | 结果 |
+| --- | --- |
+| 网关调 DSH `session/create({workspaceId})` 建会话，ACP `session/resume` 接管 | 建会话成功、侧栏立刻可见；但 **ACP resume 报 Internal error**（`session/load` 不存在） |
+| ACP 建会话后调 `session/create({sessionId: 纯 uuid})` 登记 | DSH 当它是新 id，**另建一条会话**（返回不同 id） |
+| 同上但带 `session-` 前缀 | DSH 返回同一 id，但磁盘上出现**两份**：手机的 `<uuid>` 与 DSH 的 `session-<uuid>`；桌面打开是空会话 |
+
+结论：**DSH 无法认领 ACP 创建的会话**；“创建 + 登记”这类捷径必然会多出空会话或副本。
+真正同步只能让手机会话的创建/发送/流式全部走桌面 DSH 的 RPC（`session/create`、`session/prompt`、
+`session/follow` + `$events` 审批回执），ACP 仅作桌面未启动时的兜底——这是核心传输层改造，未实施。
+
+### 31.3 已回退
+
+`registerDesktopSession` / `createDesktopSession` 的实验代码已删除（它们会给 DSH 造重复会话）；
+测试回退到 204/204。保留的一处小改动：`handlePrompt` 在会话不在本进程时先 `session/resume`
+（对**同进程/同存储**的历史会话有用；桌面建的仍会失败，失败只记日志）。
+
+### 31.4 清理
+
+本次实验产生的 7 条空/测试会话已用 DSH 官方 `workspace/archiveSession` 归档
+（不删文件、可在 DSH 里恢复）：`c6914901`、`d3adb3b7`、`e7b49625`、`43efeff5`、`session-43efeff5`、
+`session-35b8a9cb`、`0f5fe370`。用户要求保留的 3 条（群聊黑话提取 / 【当前时间】 / 帮我安装插件）未动。

@@ -37,6 +37,8 @@ const MAX_AUDIO_BODY = 24 * 1024 * 1024;
 export function createGatewayServer(deps) {
   const log = deps.log || (() => {});
   const meta = deps.meta ?? {};
+  /** 本进程已经「认识」的 ACP 会话（新建或 resume 过）；DSH 桌面端建的会话要先 resume 才能 prompt。 */
+  const acpLoaded = new Set();
 
   const server = http.createServer((req, res) => {
     handle(req, res).catch((e) => {
@@ -363,8 +365,25 @@ export function createGatewayServer(deps) {
     const body = await readJson(req, MAX_JSON_BODY);
     const cwd = String(body.cwd ?? meta.defaultCwd ?? process.cwd());
     const created = await acp.newSession({ cwd, mcpServers: body.mcpServers ?? [] });
+    acpLoaded.add(created.sessionId);
     log(`新建会话 ${created.sessionId}（cwd=${cwd}）`);
     sendJson(res, ok(created));
+  }
+
+  /**
+   * 让 ACP 进程「认识」这条会话。DSH 桌面端建的会话对本进程是 unknown，
+   * 必须先 `session/resume` 才能 prompt（实测：不 resume 直接发会报 unknown session）。
+   */
+  async function ensureAcpSession(acp, sessionId) {
+    if (!sessionId || acpLoaded.has(sessionId)) return true;
+    try {
+      await acp.resumeSession(sessionId);
+      acpLoaded.add(sessionId);
+      return true;
+    } catch (e) {
+      log(`resume 会话 ${sessionId} 失败：${e?.message ?? e}`);
+      return false;
+    }
   }
 
   async function handlePrompt(req, res, sessionId) {
@@ -372,6 +391,9 @@ export function createGatewayServer(deps) {
     const body = await readJson(req, MAX_JSON_BODY);
     const text = String(body.text ?? '').trim();
     requireThat(text.length > 0, CODES.BAD_REQUEST, '消息内容是空的', {});
+
+    // 这条会话可能是桌面 DSH 建的（或上一个网关进程建的）：先 resume 才能 prompt
+    await ensureAcpSession(acp, sessionId);
 
     // 「把鱼带到手机」：把角色人格 + 记忆卡拼在这轮消息前面。
     //
