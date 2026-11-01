@@ -196,6 +196,16 @@ before(async () => {
           ? { ...s, title: '测试会话', updatedAt: 2 }
           : { ...s, title: null, updatedAt: 1 }));
       },
+      history() {
+        return {
+          messages: [
+            { role: 'user', text: '历史里的问句' },
+            { role: 'assistant', text: '历史里的回答' },
+          ],
+          truncated: false,
+          updatedAt: 2,
+        };
+      },
     },
   });
 
@@ -830,4 +840,17 @@ test('网关不再提供手机侧归档接口（唯一权威是 DSH）', async (
   assert.equal(res.status, 404);
   const body = await res.json();
   assert.equal(body.code, 'request.not-found');
+});
+
+// ── 会话历史 ────────────────────────────────────────────────────────────
+
+test('会话历史：返回已有对话；接口要鉴权', async () => {
+  const { api } = await pairAndAuth();
+  const body = await (await api('/v1/sessions/sess-1/history?limit=50')).json();
+  assert.equal(body.ok, true);
+  assert.deepEqual(body.messages.map((m) => m.role), ['user', 'assistant']);
+  assert.equal(body.truncated, false);
+
+  const anon = await fetch(`${baseUrl}/v1/sessions/sess-1/history`);
+  assert.equal(anon.status, 401);
 });

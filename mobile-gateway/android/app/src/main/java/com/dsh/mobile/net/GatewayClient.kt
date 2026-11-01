@@ -160,6 +160,18 @@ class GatewayClient(
         }
     }
 
+    /** 会话历史（打开旧会话时补上已有对话）。读不到文件时返回空列表。 */
+    fun history(sessionId: String, limit: Int = 200): List<HistoryMessage> {
+        val res = getJson("/v1/sessions/$sessionId/history?limit=$limit")
+        val arr = res["messages"] as? kotlinx.serialization.json.JsonArray ?: return emptyList()
+        return arr.mapNotNull { el ->
+            val o = el as? JsonObject ?: return@mapNotNull null
+            val text = o["text"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+            val role = o["role"]?.jsonPrimitive?.content ?: "assistant"
+            HistoryMessage(role = role, text = text)
+        }
+    }
+
     fun createSession(cwd: String?): SessionInfo {
         val body = buildJsonObject { if (!cwd.isNullOrBlank()) put("cwd", cwd) }
         val res = postJson("/v1/sessions", body)
@@ -258,6 +270,9 @@ data class SessionInfo(
     /** 最后活动时间（毫秒）；读不到就是 null */
     val updatedAt: Long? = null,
 )
+
+/** 历史消息：role = "user" | "assistant" */
+data class HistoryMessage(val role: String, val text: String)
 
 data class SendResult(val turnId: String, val queued: Int)
 

@@ -1594,3 +1594,53 @@ App 在「上次会话没有任何消息」的情况下，会因为找不到 `la
 - 临时网关实测新会话目录正确（见 28.2）。
 - 网关已重启（当前运行版本包含 defaultCwd）。
 - 未验证：App 新建会话后在 DSH 桌面端刷新看到的实际观感。
+
+## 29. 2026-11-02 00:15 点进旧会话没有历史 → 新增会话历史接口
+
+### 29.1 现象
+
+手机下拉里点开已有会话，聊天区是空的；只有之后新发/新回的消息。
+
+### 29.2 根因
+
+App 的 `openSession()` 只做三件事：切换 sessionId、清空消息、重连 SSE。
+**它从来没有拉过历史**——以前下拉里几乎都是手机刚建的会话，所以不明显；
+现在下拉里出现桌面端的旧会话（default-workspace），一点进去就是空白。
+
+ACP 协议没有「取历史」的方法（只有 prompt / stream / list / resume），
+但会话本身完整落在 `~/.dsh/sessions/…/session.v4.jsonl.zstd`，只读解析即可。
+
+### 29.3 实现
+
+网关：
+
+- `session-meta.js` 新增 `extractHistory(raw, {limit})`：只收 `user/message` 与 `assistant/message`，
+  跳过 `system/message` 等事件；用户消息里如果带我们注入的前言（`\n\n---\n\n` 分隔 / 以【】开头），
+  剥掉前言只留原话；普通消息原样保留（不会因为以 `<` 开头就被吞）。
+- `createSessionMeta().history(sessionId, {limit})`：定位同一个会话文件 → 多帧 zstd 解压 → 解析；
+  文件不存在返回 `reason:'no-file'`（新会话正常情况），超过 16MB 返回 `too-large`。
+- `GET /v1/sessions/:id/history?limit=200`（要鉴权）：返回 `{messages, truncated, updatedAt}`。
+
+App：
+
+- `GatewayClient.history()`；`openSession()` 先把历史回填（只在这里还空着时回填，避免盖掉用户刚发的消息），
+  读取失败给红条「历史消息没读出来」+ 网关 hint；SSE 仍照常订阅新事件。
+
+### 29.4 验证
+
+- `node test/run-all.js` → **204/204**（extractHistory 3 条 + 接口 1 条）。
+- 真实数据（临时网关 8791）：`586221c0` 返回 `[{"role":"user","text":"你是金花吗？"}]`。
+- APK 已构建；**手机当前未连接**，待插上 USB 后 `adb install` 再验。
+
+### 29.5 取舍
+
+| 方案 | 问题 |
+| --- | --- |
+| 让 ACP 返回历史 | 协议没有该能力 |
+| App 自己存聊天记录 | 换手机/重装就丢，且和桌面端不一致 |
+| **只读解析会话文件**（采用） | 多帧 zstd 解析成本；大文件按 16MB 上限保护 |
+
+### 29.6 残余
+
+- 历史只取最后 200 条（`limit` 可调），更早的不显示。
+- 助手消息里的工具调用/思考块不展示，只保留文本。

@@ -11,6 +11,44 @@
 
 ## 待发布
 
+### 批次 2026-11-02 00:15 · 手机网关：打开旧会话加载历史
+<!-- release-batch: start=2026-11-02T00:00+08:00 end=2026-11-02T00:15+08:00 commits=待提交 -->
+
+**覆盖提交**：本次编辑会话尚未提交
+**建议**：与手机网关前几批一起 minor（0.2.x）
+
+**改了什么**
+
+- 网关：`session-meta.js` 新增 `extractHistory()`（只收 user/assistant 正文，跳过系统事件，
+  剥掉注入前言）与 `history(sessionId)`（多帧 zstd 只读解析，16MB 上限）。
+  新增 `GET /v1/sessions/:id/history?limit=200`（鉴权后可用）。
+- App：`openSession()` 先回填历史再订阅 SSE；只在界面仍空时回填，失败显示红条 + hint。
+- 原因：ACP 没有「取历史」方法，App 以前打开旧会话就是空白。
+
+**case**：[mobile-gateway/docs/cases/2026-10-30-dsh-mobile-app.md](../mobile-gateway/docs/cases/2026-10-30-dsh-mobile-app.md) §29
+
+**验证**：`node test/run-all.js` 204/204；真实会话 `586221c0` 返回「你是金花吗？」；
+APK 已构建（手机未连接，待装）。
+
+**发布交接**（可直接转给发布会话）：
+
+```
+改了哪些文件：
+  mobile-gateway/src/{session-meta.js, server.js}
+  mobile-gateway/android/.../{GatewayClient.kt, ChatViewModel.kt}
+  mobile-gateway/test/{session-meta.test.js, server.test.js}
+  docs（HANDOFF、cases §29、RELEASE-QUEUE）
+测过什么、结果如何：node 204/204；真实会话历史读取通过；APK 构建成功
+建议：minor（与手机网关前几批同批）
+case：mobile-gateway/docs/cases/2026-10-30-dsh-mobile-app.md §29
+改动层级：新增只读 GET /v1/sessions/:id/history（不影响旧接口）
+完整逻辑与爆炸半径：case §29.2–29.5（只读会话文件；最多 200 条；16MB 上限）
+失败路径：文件不存在返回 reason=no-file（空会话）；读失败 App 显示红条；未鉴权 401
+没验证：真机上打开旧会话的观感（设备未连接）
+```
+
+---
+
 ### 批次 2026-11-01 22:35 · 手机网关：会话归档「以 DSH 为准」（只读同步）
 <!-- release-batch: start=2026-11-01T22:05+08:00 end=2026-11-01T22:35+08:00 commits=待提交 -->
 

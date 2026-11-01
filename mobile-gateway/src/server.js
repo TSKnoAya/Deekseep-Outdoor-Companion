@@ -102,6 +102,12 @@ export function createGatewayServer(deps) {
     const streamMatch = pathname.match(/^\/v1\/sessions\/([^/]+)\/stream$/);
     if (streamMatch && req.method === 'GET') return handleStream(req, res, decodeURIComponent(streamMatch[1]));
 
+    // 会话历史：手机点进旧会话时把已有对话补回来（只读会话文件）
+    const historyMatch = pathname.match(/^\/v1\/sessions\/([^/]+)\/history$/);
+    if (historyMatch && req.method === 'GET') {
+      return handleSessionHistory(req, res, decodeURIComponent(historyMatch[1]), url);
+    }
+
     const promptMatch = pathname.match(/^\/v1\/sessions\/([^/]+)\/messages$/);
     if (promptMatch && req.method === 'POST') return handlePrompt(req, res, decodeURIComponent(promptMatch[1]));
 
@@ -334,6 +340,22 @@ export function createGatewayServer(deps) {
       return true;
     });
     sendJson(res, ok({ sessions: visible }));
+  }
+
+  /**
+   * 会话历史消息。
+   *
+   * 为什么读文件而不是问 ACP：ACP 没有「取历史」的方法（只有 prompt/stream）；
+   * 会话本来就落在 `~/.dsh/sessions/…/session.v4.jsonl.zstd`，只读解析即可，
+   * 也不会打扰正在运行的 agent。
+   */
+  function handleSessionHistory(req, res, sessionId, url) {
+    requireThat(Boolean(deps.sessionMeta?.history), CODES.BAD_REQUEST, '这个网关版本没接会话历史', {
+      hint: '升级并重启网关后再试。',
+    });
+    const rawLimit = Number(url.searchParams.get('limit') ?? 200);
+    const result = deps.sessionMeta.history(sessionId, { limit: Number.isFinite(rawLimit) ? rawLimit : 200 });
+    sendJson(res, ok({ sessionId, ...result }));
   }
 
   async function handleCreateSession(req, res) {

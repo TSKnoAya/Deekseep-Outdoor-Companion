@@ -96,6 +96,53 @@ function textOf(o) {
 }
 
 /**
+ * 用户消息的展示文本。
+ *
+ * 只在「看起来是注入/系统文本」时才用 cleanUserText：
+ * 普通用户消息原样保留（避免把以 `<`、`【` 开头的正常文本误删）。
+ */
+function userMessageText(raw) {
+  const t = String(raw ?? '').replace(/\r\n/g, '\n');
+  const looksInjected =
+    t.includes('\n\n---\n\n') ||
+    /^\s*【/.test(t) ||
+    /^\s*<system-reminder>/.test(t) ||
+    /^Current (working directory|runtime context|DSH file policy)/i.test(t);
+  return looksInjected ? cleanUserText(t) : t.trim();
+}
+
+/**
+ * 从解压后的 jsonl 里取出对话历史（只保留用户与助手的正文）。
+ *
+ * @param {string} raw
+ * @param {{limit?:number}} [options] - 最多返回最后多少条
+ * @returns {{messages:Array<{role:'user'|'assistant',text:string}>, truncated:boolean}}
+ */
+export function extractHistory(raw, options = {}) {
+  const limit = Number.isFinite(options.limit) ? Math.max(1, Math.min(500, Math.round(options.limit))) : 200;
+  const out = [];
+  for (const line of String(raw).split('\n')) {
+    const s = line.trim();
+    if (!s.startsWith('{')) continue;
+    let o;
+    try {
+      o = JSON.parse(s);
+    } catch {
+      continue;
+    }
+    if (o.type === 'user/message') {
+      const text = userMessageText(textOf(o));
+      if (text) out.push({ role: 'user', text });
+    } else if (o.type === 'assistant/message') {
+      const text = textOf(o).trim();
+      if (text) out.push({ role: 'assistant', text });
+    }
+  }
+  const truncated = out.length > limit;
+  return { messages: truncated ? out.slice(-limit) : out, truncated };
+}
+
+/**
  * DSH 的 `session.v4.jsonl.zstd` 是**追加写**的：每写一批就 append 一个 zstd 帧。
  * `zlib.zstdDecompressSync` 只解第一帧（实测：整段只回来 237 个字符），
  * 所以要按帧魔数切开逐帧解，再把文本拼起来。
@@ -227,6 +274,33 @@ export function createSessionMeta(options = {}) {
         };
       });
     },
+
+    /**
+     * 读一段会话的历史消息（手机点进旧会话时用）。
+     *
+     * 不做缓存：历史会一直增长，按 mtime 缓存等于每次都要重解；而它只在「打开会话」时调用一次。
+     * 读不到文件不算错误（可能是刚建的空会话），返回 reason 让调用方决定怎么展示。
+     */
+    history(sessionId, options = {}) {
+      const file = locate(sessionId);
+      if (!file) return { messages: [], reason: 'no-file' };
+      let st;
+      try {
+        st = fsLike.statSync(file);
+      } catch {
+        return { messages: [], reason: 'no-file' };
+      }
+      const updatedAt = Math.round(st.mtimeMs);
+      if (st.size > maxBytes) return { messages: [], reason: 'too-large', updatedAt };
+      try {
+        const raw = decompressAllFrames(fsLike.readFileSync(file), zlibLike).toString('utf8');
+        const { messages, truncated } = extractHistory(raw, options);
+        return { messages, truncated, updatedAt };
+      } catch {
+        return { messages: [], reason: 'unreadable', updatedAt };
+      }
+    },
+
     clear: () => cache.clear(),
   };
 }

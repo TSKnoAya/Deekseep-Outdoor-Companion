@@ -5,6 +5,17 @@
 
 ---
 
+## 快照：2026-11-02 00:15（旧会话打开是空的 → 历史接口）
+
+- 根因：App `openSession()` 只清空消息 + 订阅 SSE，从来没拉历史；ACP 也没有“取历史”方法。
+- 实现：`session-meta.js` 新增 `extractHistory()` 与 `history(sessionId)`（只读多帧 zstd 会话文件，
+  剥掉注入前言，跳过系统事件）；`GET /v1/sessions/:id/history?limit=200`；
+  App 打开会话时先回填历史（界面仍空时才回填），失败给红条。
+- 验证：node **204/204**；真实会话 `586221c0` 返回「你是金花吗？」。
+- APK 已构建；**手机未连接（adb 无设备）**，待插 USB 后安装。
+
+---
+
 ## 快照：2026-11-01 23:40（手机新会话归入 DSH 工作区）
 
 - 问题：手机会话 cwd 是 `...\surfcore\mobile-gateway`，不在 DSH 的 3 个工作区里 → 桌面端看不到。

@@ -378,7 +378,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun openSession(sessionId: String) {        sse?.cancel()
+    fun openSession(sessionId: String) {
+        sse?.cancel()
         store.lastSessionId = sessionId
         _state.update {
             it.copy(
@@ -391,6 +392,30 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             )
         }
         val c = client ?: return
+
+        // 旧会话的对话在 DSH 的会话文件里：先补历史，再订阅新事件。
+        // 只有界面还空着才回填——用户手快先发了一条时，不能把它盖掉。
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val hist = c.history(sessionId)
+                if (hist.isEmpty()) return@launch
+                _state.update { st ->
+                    if (st.currentSessionId != sessionId || st.messages.isNotEmpty()) st
+                    else st.copy(messages = hist.map { m ->
+                        ChatMessage(
+                            role = if (m.role == "user") Role.User else Role.Assistant,
+                            text = m.text,
+                        )
+                    })
+                }
+            } catch (e: GatewayException) {
+                _state.update { st ->
+                    if (st.currentSessionId != sessionId) st
+                    else st.copy(banner = Banner("历史消息没读出来", e.hint.ifBlank { e.error }, e.retryable))
+                }
+            }
+        }
+
         sse = SseSubscription(
             c,
             sessionId,

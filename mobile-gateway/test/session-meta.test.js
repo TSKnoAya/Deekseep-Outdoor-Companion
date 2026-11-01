@@ -165,3 +165,41 @@ test('前言很长（分隔符在 400 字之后）也要能取到用户原话', 
   });
   assert.equal(extractMeta(msg).firstUser, '我想问个事儿');
 });
+
+// ── 会话历史 ────────────────────────────────────────────────────────────
+
+test('历史只收用户与助手正文，系统事件跳过，注入前言被剥掉', async () => {
+  const { extractHistory } = await import('../src/session-meta.js');
+  const raw = [
+    '{"type":"session","data":{"id":"s1"}}',
+    JSON.stringify({ type: 'user/message', data: { content: [{ type: 'text', text: '【你是下面这个角色】\n设定…\n\n---\n\n你好' }] } }),
+    JSON.stringify({ type: 'system/message', data: { text: '系统提醒，不该出现' } }),
+    JSON.stringify({ type: 'assistant/message', data: { content: [{ type: 'text', text: '在的' }] } }),
+    JSON.stringify({ type: 'user/message', data: { text: '再来一句' } }),
+  ].join('\n');
+  const { messages, truncated } = extractHistory(raw);
+  assert.deepEqual(messages, [
+    { role: 'user', text: '你好' },
+    { role: 'assistant', text: '在的' },
+    { role: 'user', text: '再来一句' },
+  ]);
+  assert.equal(truncated, false);
+});
+
+test('历史上限只取最后 N 条，并标记 truncated', async () => {
+  const { extractHistory } = await import('../src/session-meta.js');
+  const raw = [
+    '{"type":"user/message","data":{"text":"一"}}',
+    '{"type":"assistant/message","data":{"text":"二"}}',
+    '{"type":"user/message","data":{"text":"三"}}',
+  ].join('\n');
+  const r = extractHistory(raw, { limit: 2 });
+  assert.deepEqual(r.messages.map((m) => m.text), ['二', '三']);
+  assert.equal(r.truncated, true);
+});
+
+test('普通用户消息原样保留（不因为以符号开头就被吞）', async () => {
+  const { extractHistory } = await import('../src/session-meta.js');
+  const raw = JSON.stringify({ type: 'user/message', data: { text: '<div>怎么改这个标签？' } });
+  assert.equal(extractHistory(raw).messages[0].text, '<div>怎么改这个标签？');
+});
