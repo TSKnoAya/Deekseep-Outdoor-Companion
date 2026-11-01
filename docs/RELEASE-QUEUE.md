@@ -11,41 +11,44 @@
 
 ## 待发布
 
-### 批次 2026-11-01 22:25 · 手机网关：会话归档（只从手机隐藏）
-<!-- release-batch: start=2026-11-01T22:05+08:00 end=2026-11-01T22:25+08:00 commits=待提交 -->
+### 批次 2026-11-01 22:35 · 手机网关：会话归档「以 DSH 为准」（只读同步）
+<!-- release-batch: start=2026-11-01T22:05+08:00 end=2026-11-01T22:35+08:00 commits=待提交 -->
 
 **覆盖提交**：本次编辑会话尚未提交
 **建议**：与手机网关前几批一起 minor（0.2.x）
 
 **改了什么**
 
-- 网关：新增 `src/session-archive.js`（归档名单持久化到 `<stateDir>/archived-sessions.json`，
-  写盘失败回滚内存）；`GET /v1/sessions` 每条带 `archived`；
-  新增 `POST /v1/sessions/:id/archive` 与 `/unarchive`。
-- App：会话下拉每行增加「归档/恢复」按钮；底部「显示已归档（N）」可展开并逐条恢复；
-  归档只影响这台手机，桌面端不受影响。
-- 明确不做「删除文件」：列表包含桌面会话，删文件会波及电脑。
+- 网关：新增 `src/dsh-archive.js`，**只读** DSH 的 `~/.dsh/storages/workspace.json`
+  → `global.archivedSessionIds`（mtime+size 缓存，DSH 保存后自动生效；坏档沿用上次结果）。
+- `GET /v1/sessions` 默认过滤 DSH 已归档的会话（`?includeArchived=1` 才返回并带 `archived:true`）。
+- 撤回 §25 的手机侧独立归档：删除 `session-archive.js`、`POST /v1/sessions/:id/archive|unarchive`
+  以及 App 的归档/恢复按钮与「显示已归档」开关。
+- 归档/取消归档统一在 DSH 桌面端做；手机只跟随，不反向写 DSH 状态（跨进程写无锁，风险大）。
 
-**case**：[mobile-gateway/docs/cases/2026-10-30-dsh-mobile-app.md](../mobile-gateway/docs/cases/2026-10-30-dsh-mobile-app.md) §25
+**case**：[mobile-gateway/docs/cases/2026-10-30-dsh-mobile-app.md](../mobile-gateway/docs/cases/2026-10-30-dsh-mobile-app.md) §26（§25 已被取代）
 
 **验证**：`node test/run-all.js` 202/202；`gradle assembleDebug` 成功并已装真机；
 未验证：真机下拉点击手感。
+
+**验证**：`node test/run-all.js` 200/200；`gradle assembleDebug` 成功并已装真机
+（dex 里旧「显示已归档」文案已消失）；未验证：真机归档后列表刷新观感。
 
 **发布交接**（可直接转给发布会话）：
 
 ```
 改了哪些文件：
-  mobile-gateway/src/{session-archive.js（新）, server.js, main.js}
-  mobile-gateway/test/{session-archive.test.js（新）, server.test.js, run-all.js}
+  mobile-gateway/src/{dsh-archive.js（新）, server.js, main.js}
+  mobile-gateway/test/{dsh-archive.test.js（新）, server.test.js, run-all.js}
   mobile-gateway/android/.../{GatewayClient.kt, ChatViewModel.kt, ChatScreen.kt}
-  docs（HANDOFF、cases §25、RELEASE-QUEUE）
-测过什么、结果如何：node 202/202；assembleDebug 成功；APK 已装红米 K80
+  docs（HANDOFF、cases §26、RELEASE-QUEUE）
+测过什么、结果如何：node 200/200；assembleDebug 成功；APK 已装红米 K80
 建议：minor（与手机网关前几批同批）
-case：mobile-gateway/docs/cases/2026-10-30-dsh-mobile-app.md §25
-改动层级：接口层新增 archived 字段与两个 POST（旧客户端忽略新字段，兼容）
-完整逻辑与爆炸半径：case §25.3–25.5（只写一个 json，不碰会话文件）
-失败路径：case §25.8（写盘失败/旧网关/离线，App 均显示红条）
-没验证：真机归档按钮的点击手感
+case：mobile-gateway/docs/cases/2026-10-30-dsh-mobile-app.md §26（§25 已被取代）
+改动层级：/v1/sessions 默认过滤归档（行为变化）；删除了未发布的手机侧归档接口
+完整逻辑与爆炸半径：case §26.1–26.3（只读 workspace.json，不写 DSH 状态）
+失败路径：DSH 文件缺失/坏档沿用上次结果；网关旧版则 App 照常（只是没有过滤）
+没验证：真机上归档后下拉刷新的观感
 ```
 
 ---

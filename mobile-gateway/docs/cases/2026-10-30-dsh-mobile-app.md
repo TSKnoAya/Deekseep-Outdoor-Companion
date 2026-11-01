@@ -1420,6 +1420,8 @@ DSH 退出 → ctx.effect 清理里 stopGateway()（只停按钮启动的那个�
 
 ## 25. 2026-11-01 22:25 会话太多：手机下拉加「归档」（只隐藏，不删文件）
 
+> 本节方案已被 §26 取代：归档以 DSH 为准，手机只读同步，不再保留手机侧归档名单。
+
 ### 25.1 用户原话
 
 > 「app 上点右上角的下拉，有很多对话，没有删除或者归档的方法」
@@ -1483,3 +1485,43 @@ App：默认过滤 archived；下拉底部「显示已归档（N）」可展开�
 
 删 `src/session-archive.js` + server 两处路由与列表标记 + main 的 archive 注入 + App 的归档 UI；
 归档名单文件留着也不会影响旧版本（旧版本不读它）。
+
+## 26. 2026-11-01 22:35 归档以 DSH 为准（撤回手机侧独立归档）
+
+> §25 的方案（手机自己存一份归档名单）已被本节取代：DSH 只有「归档」没有「删除」，
+> 用户要求「以 DSH 为准，保持和 DSH 同步」。
+
+### 26.1 DSH 的归档在哪
+
+- 状态：`~/.dsh/storages/workspace.json` → `global.archivedSessionIds`（会话 id 数组，全局）。
+- 能力：DSH 桌面端 `WorkspaceController.archiveSession(sessionId, { stopActivity })` / `unarchiveSession`，
+  属于 workspace 服务（桌面/Web 层），**ACP profile 不挂它**，所以网关拿不到。
+
+### 26.2 最终做法（只读跟随）
+
+- 网关新增 `src/dsh-archive.js`：只读上面那个文件，`mtime+size` 缓存，DSH 保存后自动生效；
+  坏档保留上一次结果，不把列表清空。
+- `GET /v1/sessions`：默认**过滤掉 DSH 已归档的会话**；`?includeArchived=1` 才返回并带 `archived:true`（调试用）。
+- 删除 §25 的手机侧 `archive/unarchive` 接口与 App 按钮——归档/取消统一在 DSH 里做。
+- App 下拉空态文案改为「还没有历史会话（在电脑 DSH 里归档的不会出现在这里）」。
+
+### 26.3 为什么不做双向（手机也能归档）
+
+| 路线 | 问题 |
+| --- | --- |
+| 网关直接写 `workspace.json` | DSH 内存里也有这份状态且无跨进程锁，会被覆盖/互相踩（BOUNDARIES §8） |
+| 网关 → 插件 → workspaceController | 可行但要多一条「网关找 DSH Web 端口 → 插件路由 → 控制器」的链路，兼容性没验证 |
+| **只读跟随**（采用） | 零写风险；归档操作在 DSH，手机即时同步 |
+
+如果以后确实要「手机点归档、DSH 也归档」，再按第二条做，并且要先验证控制器 API。
+
+### 26.4 验证
+
+- `node test/run-all.js` → **200/200**（dsh-archive 5 条：读取、mtime 自动生效、缺文件、坏档保留、脏数据过滤；
+  接口 2 条：默认过滤 + includeArchived、归档接口已移除返回 404）。
+- APK 重建并已装红米 K80；dex 确认旧「显示已归档」文案已消失。
+- 未验证：真机上归档后下拉刷新的观感。
+
+### 26.5 回滚
+
+恢复 §25 的 `session-archive.js` 与接口/UI 即可；或只保留只读同步、恢复手机按钮作为「仅手机隐藏」（会重新分叉，不建议）。

@@ -156,18 +156,8 @@ class GatewayClient(
                 cwd = o["cwd"]?.jsonPrimitive?.content ?: "",
                 title = o["title"]?.jsonPrimitive?.contentOrNull,
                 updatedAt = o["updatedAt"]?.jsonPrimitive?.contentOrNull?.toLongOrNull(),
-                archived = o["archived"]?.jsonPrimitive?.content?.toBoolean() ?: false,
             )
         }
-    }
-
-    /**
-     * 归档 / 取消归档：**只在手机列表里隐藏**，网关不动会话文件。
-     * 桌面端会话也会出现在这个列表里，所以这里刻意不提供「删除」。
-     */
-    fun setSessionArchived(sessionId: String, archived: Boolean) {
-        val action = if (archived) "archive" else "unarchive"
-        postJson("/v1/sessions/$sessionId/$action", buildJsonObject { })
     }
 
     fun createSession(cwd: String?): SessionInfo {
@@ -267,8 +257,6 @@ data class SessionInfo(
     val title: String? = null,
     /** 最后活动时间（毫秒）；读不到就是 null */
     val updatedAt: Long? = null,
-    /** true = 只在手机列表里隐藏（桌面端不受影响） */
-    val archived: Boolean = false,
 )
 
 data class SendResult(val turnId: String, val queued: Int)

@@ -5,6 +5,19 @@
 
 ---
 
+## 快照：2026-11-01 22:35（会话归档改为「以 DSH 为准」）
+
+- 用户指出：DSH 里只有「归档」没有「删除」，且要求以 DSH 为准、保持同步。
+- 发现：DSH 归档状态在 `~/.dsh/storages/workspace.json` → `global.archivedSessionIds`；
+  归档能力属于 workspace 控制器（桌面层），ACP profile 不挂，网关拿不到。
+- 最终：网关**只读**该文件（`src/dsh-archive.js`，mtime+size 缓存），
+  `/v1/sessions` 默认过滤已归档（`?includeArchived=1` 调试用）；
+  移除 §25 的手机侧归档接口与 App 按钮，归档/取消统一在 DSH。
+- 验证：node **200/200**；APK 重建并装真机（旧「显示已归档」文案已消失）。
+- 文档：case §26（§25 已被取代）。
+
+---
+
 ## 快照：2026-11-01 22:25（手机端会话归档：只隐藏，不删文件）
 
 - 用户反馈：App 右上角下拉会话太多，没有删除/归档入口。

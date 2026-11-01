@@ -21,7 +21,6 @@ import { createDeviceAsr } from '../src/voice/asr-device.js';
 import { createSettingsStore } from '../src/config.js';
 import { fail, CODES } from '../src/errors.js';
 import { parsePairPayload } from '../src/pair-qr.js';
-import { createSessionArchive } from '../src/session-archive.js';
 
 let server;
 let baseUrl;
@@ -33,7 +32,16 @@ let asr;
 let tts;
 let fakeAcp;
 let acpConnected = true;
-let archive;
+/** DSH 的归档状态是只读的；测试里用 Set 模拟 workspace.json 里的 archivedSessionIds */
+const fakeDshArchive = {
+  ids: new Set(),
+  has(id) {
+    return this.ids.has(String(id));
+  },
+  list() {
+    return [...this.ids];
+  },
+};
 /** 角色上下文（「把鱼带到手机」）的假实现：只关心 /admin/persona 的读写契约。 */
 const fakeFish = {
   enabled: true,
@@ -134,7 +142,6 @@ before(async () => {
   hub = new SessionHub({ queueLimit: 3 });
   approvals = new ApprovalRegistry({ timeoutMs: 2000 });
   settings = createSettingsStore({ file: path.join(dir, 'settings.json') });
-  archive = createSessionArchive({ file: path.join(dir, 'archived-sessions.json') });
 
   asr = new BackendRegistry('asr');
   asr.register(createDeviceAsr());
@@ -178,7 +185,7 @@ before(async () => {
       addresses: () => adminAddresses,
     },
     fish: fakeFish,
-    archive,
+    dshArchive: fakeDshArchive,
   });
 
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -777,39 +784,35 @@ test('角色上下文：老的 {enabled:false} 写法仍然可用', async () => 
   fakeFish.enabled = true; // 别影响其它用例
 });
 
-// ── 会话归档（只隐藏，不删文件） ─────────────────────────────────────────
+// ── 会话归档：以 DSH 为准（只读 workspace.json） ─────────────────────────
 
-test('会话列表带 archived 标记；归档后标记为 true，取消后恢复', async () => {
+test('DSH 里归档的会话默认不出现在手机列表；includeArchived=1 才带上', async () => {
   const { api } = await pairAndAuth();
-  const list0 = await (await api('/v1/sessions')).json();
-  const target = list0.sessions.find((s) => s.sessionId === 'sess-1');
-  assert.ok(target, '假 ACP 应返回 sess-1');
-  assert.equal(target.archived, false);
+  fakeDshArchive.ids.clear();
 
-  const a = await api('/v1/sessions/sess-1/archive', { method: 'POST' });
-  assert.equal(a.status, 200);
-  assert.equal((await a.json()).archived, true);
+  const before = await (await api('/v1/sessions')).json();
+  assert.ok(before.sessions.some((s) => s.sessionId === 'sess-1'));
 
-  const list1 = await (await api('/v1/sessions')).json();
-  assert.equal(list1.sessions.find((s) => s.sessionId === 'sess-1').archived, true);
+  // 模拟用户在 DSH 桌面端点了「归档」
+  fakeDshArchive.ids.add('sess-1');
 
-  const u = await api('/v1/sessions/sess-1/unarchive', { method: 'POST' });
-  assert.equal((await u.json()).archived, false);
+  const hidden = await (await api('/v1/sessions')).json();
+  assert.equal(hidden.sessions.some((s) => s.sessionId === 'sess-1'), false, '归档后手机列表里应看不到');
 
-  const list2 = await (await api('/v1/sessions')).json();
-  assert.equal(list2.sessions.find((s) => s.sessionId === 'sess-1').archived, false);
+  const all = await (await api('/v1/sessions?includeArchived=1')).json();
+  const row = all.sessions.find((s) => s.sessionId === 'sess-1');
+  assert.equal(row.archived, true, '显式要全量时应带 archived 标记');
+
+  // 模拟在 DSH 里取消归档
+  fakeDshArchive.ids.delete('sess-1');
+  const back = await (await api('/v1/sessions')).json();
+  assert.ok(back.sessions.some((s) => s.sessionId === 'sess-1'));
 });
 
-test('归档非法会话 id：400 + code + hint（不能静默）', async () => {
+test('网关不再提供手机侧归档接口（唯一权威是 DSH）', async () => {
   const { api } = await pairAndAuth();
-  const res = await api(`/v1/sessions/${encodeURIComponent('bad id!')}/archive`, { method: 'POST' });
-  assert.equal(res.status, 400);
+  const res = await api('/v1/sessions/sess-1/archive', { method: 'POST' });
+  assert.equal(res.status, 404);
   const body = await res.json();
-  assert.equal(body.code, 'request.invalid');
-  assert.ok(body.hint.length > 0);
-});
-
-test('归档接口也要鉴权：没令牌 401', async () => {
-  const res = await fetch(`${baseUrl}/v1/sessions/sess-1/archive`, { method: 'POST' });
-  assert.equal(res.status, 401);
+  assert.equal(body.code, 'request.not-found');
 });

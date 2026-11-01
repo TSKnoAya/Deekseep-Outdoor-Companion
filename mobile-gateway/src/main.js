@@ -28,7 +28,7 @@ import {
 } from './config.js';
 import { resolveDshPaths, notFoundHint } from './paths.js';
 import { createFishInjector } from './fish-inject.js';
-import { createSessionArchive } from './session-archive.js';
+import { createDshArchive } from './dsh-archive.js';
 import { createSessionMeta } from './session-meta.js';
 import { parseArgs, usage, isLoopbackHost, isTailscaleIp, lanAddresses } from './cli.js';
 import { CODES, fail } from './errors.js';
@@ -225,8 +225,8 @@ const server = createGatewayServer({
   log,
   // 会话列表的标题/时间：读 DSH 的 sessions 目录（只读，带 mtime 缓存）
   sessionMeta: createSessionMeta({ dshHome }),
-  // 手机侧「归档」：只在手机列表里隐藏，不动会话文件
-  archive: createSessionArchive({ file: path.join(config.stateDir, 'archived-sessions.json'), log }),
+  // 手机侧跟随 DSH 的归档状态（只读 workspace.json，不跨进程写）
+  dshArchive: createDshArchive({ file: path.join(dshHome, 'storages', 'workspace.json'), log }),
   // 「把鱼带到手机」：只在装了 SurfCore 且有当前角色时生效；`DSH_MOBILE_PERSONA=0` 可关
   fish: createFishInjector({
     dshHome,

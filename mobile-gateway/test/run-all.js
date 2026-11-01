@@ -26,6 +26,7 @@ const FILES = [
   'announce.test.js',
   'cli.test.js',
   'devices.test.js',
+  'dsh-archive.test.js',
   'errors-audio.test.js',
   'fish-context.test.js',
   'fish-inject.test.js',
@@ -34,7 +35,6 @@ const FILES = [
   'paths.test.js',
   'plugin-routes.test.js',
   'server.test.js',
-  'session-archive.test.js',
   'session-meta.test.js',
 ];
 

@@ -378,32 +378,6 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 归档：只从手机列表里隐藏，不动会话文件（桌面端照常）。 */
-    fun archiveSession(sessionId: String) = setSessionArchived(sessionId, true)
-
-    fun unarchiveSession(sessionId: String) = setSessionArchived(sessionId, false)
-
-    private fun setSessionArchived(sessionId: String, archived: Boolean) {
-        val c = client ?: return
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                c.setSessionArchived(sessionId, archived)
-                _state.update { st ->
-                    st.copy(sessions = st.sessions.map {
-                        if (it.sessionId == sessionId) it.copy(archived = archived) else it
-                    })
-                }
-            } catch (e: GatewayException) {
-                _state.update { it.copy(banner = Banner(e.error, e.hint, e.retryable)) }
-            }
-        }
-    }
-
-    /** 下拉里是否显示已归档的会话（只影响界面，不请求网关）。 */
-    fun toggleShowArchived() {
-        _state.update { it.copy(showArchived = !it.showArchived) }
-    }
-
     fun openSession(sessionId: String) {        sse?.cancel()
         store.lastSessionId = sessionId
         _state.update {
@@ -765,8 +739,6 @@ data class AppState(
     val gatewayVersion: String? = null,
     val dshConnected: Boolean = false,
     val sessions: List<com.dsh.mobile.net.SessionInfo> = emptyList(),
-    /** 下拉里是否显示已归档（默认隐藏） */
-    val showArchived: Boolean = false,
     val currentSessionId: String? = null,
     val messages: List<ChatMessage> = emptyList(),
     val streamingText: String = "",
