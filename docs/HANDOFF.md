@@ -5,6 +5,17 @@
 
 ---
 
+## 快照：2026-11-02 02:20（清理到 3 条 + App 启动不再建会话）
+
+- 清理：按用户要求只留 3 条（群聊黑话提取 / 【当前时间】 / 帮我安装插件），其余 13 条
+  （含「你是金花吗？」「你记得…」、测试与空会话）全部移入
+  `~/.dsh/_quarantine/keep3-…`；`workspace.json` 引用同步清理（dirs=3、refs=3、archived=0）。
+- App：`loadSessionsAndConnect` 不再自动建会话；`send()` 在无会话时先建后发；
+  「＋」仍显式新建。APK 已重装。
+- 目的：避免“App 一启动，DSH 就多一条未命名”，让两边稳定在同样的对话集合。
+
+---
+
 ## 快照：2026-11-02 02:00（阶段 1：桌面 DSH 传输，手机会话与桌面同源）
 
 - 新增 `mobile-gateway/src/desktop-client.js`：与 AcpClient 同形，走桌面 DSH Web RPC

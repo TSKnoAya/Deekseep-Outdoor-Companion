@@ -1756,3 +1756,26 @@ auto：桌面 DSH 在跑 → RPC；否则退回 ACP（旧行为）。
 ### 32.4 回滚
 
 `DSH_MOBILE_TRANSPORT=acp` 重启网关即回到纯 ACP；或删除 `desktop-client.js` 与 main 里的选择分支。
+
+## 33. 2026-11-02 02:20 App 启动不再自动建会话（避免 DSH 凭空多一条空对话）
+
+### 33.1 现象
+
+手机 App 每次启动/重连，如果 `lastSessionId` 不在会话列表里（被删、被归档、网关换进程），
+`loadSessionsAndConnect` 会**自动新建一个会话**。走桌面 RPC 传输后，这个空会话会立刻出现在
+DSH 侧栏（「未命名」），导致“两边条数又不一样了”。
+
+### 33.2 修法
+
+- `loadSessionsAndConnect`：找不到上次会话时**不再建**，只把 `currentSessionId` 置空；
+- `send()`：没有会话时走 `sendInNewSession` —— **先建会话再发第一条消息**（用户真正要说话才建）；
+- 顶栏「＋」仍然立即新建（用户显式动作）。
+
+### 33.3 验证
+
+- `gradle testDebugUnitTest assembleDebug` 通过，已 `adb install -r -d` 到红米 K80；
+- 未验证：真机上「启动后不建、发首条才建」的完整点击链路。
+
+### 33.4 残余
+
+- 用户发第一条消息时仍会新建会话（这是预期，DSH 会多出对应的一条真实对话）。

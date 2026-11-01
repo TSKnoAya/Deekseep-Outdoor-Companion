@@ -334,7 +334,11 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 // 当前进程不认识它，一发消息就 "unknown session: ..."（真机踩过）。
                 val target = store.lastSessionId?.takeIf { id -> sessions.any { it.sessionId == id } }
                 if (target == null) {
-                    createSession()
+                    // 不自动建会话：启动就建 → DSH 里会凭空多一个空对话。
+                    // 等用户点「＋」或发第一条消息时再建（sendInNewSession）。
+                    _state.update {
+                        it.copy(currentSessionId = null, messages = emptyList(), streamingText = "", thinking = false)
+                    }
                 } else {
                     openSession(target)
                 }
@@ -530,14 +534,38 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     fun send(text: String) {
         val c = client ?: return
-        val s = _state.value
-        val sessionId = s.currentSessionId ?: run {
-            createSession()
-            return
-        }
         val body = text.trim()
         if (body.isEmpty()) return
+        val sessionId = _state.value.currentSessionId
+        if (sessionId == null) {
+            // 没有会话时「先发后建」：启动时不建，避免在 DSH 里凭空多一个空对话
+            sendInNewSession(c, body)
+            return
+        }
+        dispatchSend(c, sessionId, body)
+    }
 
+    /** 第一条消息：先建会话，再把它发出去。 */
+    private fun sendInNewSession(c: GatewayClient, body: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val created = c.createSession(null)
+                store.lastSessionId = created.sessionId
+                _state.update {
+                    it.copy(
+                        currentSessionId = created.sessionId,
+                        sessions = runCatching { c.listSessions() }.getOrDefault(it.sessions),
+                    )
+                }
+                openSession(created.sessionId)
+                dispatchSend(c, created.sessionId, body)
+            } catch (e: GatewayException) {
+                _state.update { it.copy(banner = Banner(e.error, e.hint, e.retryable)) }
+            }
+        }
+    }
+
+    private fun dispatchSend(c: GatewayClient, sessionId: String, body: String) {
         _state.update {
             it.copy(
                 messages = it.messages + ChatMessage(role = Role.User, text = body),
