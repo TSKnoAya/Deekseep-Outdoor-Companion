@@ -11,6 +11,42 @@
 
 ## 待发布
 
+### 批次 2026-11-02 02:00 · 手机网关：桌面 DSH 传输（阶段 1）
+<!-- release-batch: start=2026-11-02T01:45+08:00 end=2026-11-02T02:00+08:00 commits=待提交 -->
+
+**覆盖提交**：本次编辑会话尚未提交
+**建议**：与手机网关前几批一起 minor（0.2.x）
+
+**改了什么**
+
+- 新增 `src/desktop-client.js`：与 AcpClient 同形，通过桌面 DSH Web RPC 建会话/发消息/收事件/答审批；
+  手机会话与桌面同源（DSH 侧栏立刻可见）。
+- `src/main.js` 增加传输选择：`DSH_MOBILE_TRANSPORT=auto|desktop|acp`（默认 auto）。
+- 保留 ACP 作为兜底；旧行为可用 `=acp` 恢复。
+
+**case**：[mobile-gateway/docs/cases/2026-10-30-dsh-mobile-app.md](../mobile-gateway/docs/cases/2026-10-30-dsh-mobile-app.md) §32
+
+**验证**：node 204/204；真实桌面 DSH 端到端（建会话 + prompt + SSE + turn_end）；
+未验证：审批真机弹窗、无流式的手机观感。
+
+**发布交接**：
+
+```
+改了哪些文件：
+  mobile-gateway/src/{desktop-client.js（新）, main.js}
+  mobile-gateway/{docs/cases §32}
+  docs（HANDOFF、PITFALLS、RELEASE-QUEUE）
+测过什么、结果如何：node 204/204；桌面 DSH 传输 e2e 通过（SSE turn_end ok, 1.8s）
+建议：minor
+case：mobile-gateway/docs/cases/2026-10-30-dsh-mobile-app.md §32
+改动层级：新增传输实现 + 启动时选择逻辑；`DSH_MOBILE_TRANSPORT=acp` 可完全回退
+完整逻辑与爆炸半径：case §32（桌面在则 RPC，不在则 ACP）
+失败路径：桌面不可用自动退 ACP；prompt 失败/超时有结构化错误；问答自动空答案防卡死
+没验证：审批真机、手机无逐字流式的观感、桌面换端口后的重连
+```
+
+---
+
 ### 批次 2026-11-02 00:15 · 手机网关：打开旧会话加载历史
 <!-- release-batch: start=2026-11-02T00:00+08:00 end=2026-11-02T00:15+08:00 commits=待提交 -->
 

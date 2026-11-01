@@ -1722,3 +1722,37 @@ DSH 启动后侧栏出现「手机网关」分组，点开能看到「你是金�
 本次实验产生的 7 条空/测试会话已用 DSH 官方 `workspace/archiveSession` 归档
 （不删文件、可在 DSH 里恢复）：`c6914901`、`d3adb3b7`、`e7b49625`、`43efeff5`、`session-43efeff5`、
 `session-35b8a9cb`、`0f5fe370`。用户要求保留的 3 条（群聊黑话提取 / 【当前时间】 / 帮我安装插件）未动。
+
+## 32. 2026-11-02 02:00 阶段 1：桌面 DSH 传输（手机会话与桌面同源）
+
+### 32.1 做了什么
+
+新增 `src/desktop-client.js`：与 `AcpClient` **同形**的传输实现，直接走桌面 DSH 的 Web RPC。
+
+- 建会话：`session/create`（按 cwd 找到工作区 id），DSH 侧栏**立刻**出现；
+- 发消息：`session/prompt`（`mode:'queue'`，content 文本块），`session/follow` 收事件；
+- 回合结束：用 dsh-client 的 `createTurnCollector()` 吃 `session/event`，完整文本在 turn/end 拿到；
+- 审批：`approval/requested` → 现有 `ApprovalRegistry` → `$events/result` 回执（`allowed-once` / `rejected`）；
+- `listSessions` 用 `session/list`（`items[]`，带 cwd/updatedAt）。
+
+选择逻辑（`src/main.js`）：`DSH_MOBILE_TRANSPORT` = `auto`（默认）/ `desktop` / `acp`。
+auto：桌面 DSH 在跑 → RPC；否则退回 ACP（旧行为）。
+
+### 32.2 实测
+
+- 网关日志：`桌面 DSH 传输已连接：http://127.0.0.1:1742`；
+- 建会话返回 `session-…`（DSH 建，直接进默认工作区）；
+- SSE：`hello → turn_start → text "OK" → turn_end ok`（1.8s）；
+- 会话文件：`turn/start → assistant/message("OK", provider magpie, deepseek-v4.1-flash-sg) → turn/end`；
+- `node test/run-all.js` 204/204（新增模块暂由 e2e 覆盖，单测待补）。
+
+### 32.3 已知边界（阶段 2）
+
+- **没有逐字流式**：RPC 事件里拿到的是完整 assistant/message，手机是「完成后整段出现」；
+- **桌面重启换端口**：DesktopClient 目前只重连同一 baseUrl，不会重新发现端口；
+- 桌面在网关启动后才打开：仍需重启网关才会切到 RPC（启动时探测一次）；
+- 审批路径已实现但未在真机触发验证；问答（question/requested）自动回空答案避免卡死。
+
+### 32.4 回滚
+
+`DSH_MOBILE_TRANSPORT=acp` 重启网关即回到纯 ACP；或删除 `desktop-client.js` 与 main 里的选择分支。

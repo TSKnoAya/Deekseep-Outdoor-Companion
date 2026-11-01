@@ -3244,3 +3244,13 @@ B站/桌宠被迫读 QQ 规则；核心和日常没有边界。
   `~/.dsh/storages/workspace.json`（先备份），加一个 `{path,title,sessionIds,createdAt,updatedAt}` 条目
   并把 id 追加进 `global.workspaceIds`；运行中写会被内存状态覆盖。
   ACP 会话 id 是**纯 uuid**（与 `storages/session_projcache/sessions/<uuid>.json` 一致）。
+
+## ACP 建的会话，桌面 DSH 不认领 —— 两条捷径都会制造重复会话
+
+- **现象**：手机（ACP）新建的会话，DSH 侧栏不出现；想“登记”它却多出空会话/副本。
+- **实测**：
+  - `session/create({sessionId: 纯 uuid})` → DSH 当新 id，另建一条（返回不同 id）；
+  - 带 `session-` 前缀 → 返回同 id，但磁盘上出现 `<uuid>` 与 `session-<uuid>` 两份，桌面打开是空会话；
+  - ACP `session/resume` 接管桌面建的会话 → `Internal error`（`session/load` 不存在）。
+- **结论**：DSH 只认自己建的会话。要同源，只能让手机会话的创建/发送/事件/审批全部走 DSH 的 Web RPC
+  （见 `mobile-gateway/src/desktop-client.js`，case §32），不要试图“登记/认领”。

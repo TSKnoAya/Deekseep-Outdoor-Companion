@@ -29,6 +29,7 @@ import {
 import { resolveDshPaths, notFoundHint } from './paths.js';
 import { createFishInjector } from './fish-inject.js';
 import { createDshArchive } from './dsh-archive.js';
+import { DesktopClient } from './desktop-client.js';
 import { createSessionMeta } from './session-meta.js';
 import { parseArgs, usage, isLoopbackHost, isTailscaleIp, lanAddresses } from './cli.js';
 import { CODES, fail } from './errors.js';
@@ -135,8 +136,47 @@ const approvals = new ApprovalRegistry({
 let acp = null;
 let stopping = false;
 let reconnectDelay = 1000;
+let connecting = false;
 
-function connect() {
+/**
+ * 传输选择：
+ * - 默认 auto：桌面 DSH 在跑就走 RPC（手机会话与桌面同源），否则退回 ACP；
+ * - `DSH_MOBILE_TRANSPORT=desktop`：只走桌面 RPC（不可用就重试，不退 ACP）；
+ * - `DSH_MOBILE_TRANSPORT=acp`：保持旧行为。
+ */
+async function connect() {
+  if (stopping || connecting) return;
+  connecting = true;
+  try {
+    const mode = String(process.env.DSH_MOBILE_TRANSPORT || startupCfg.transport || 'auto').toLowerCase();
+    if (mode !== 'acp') {
+      try {
+        const desktop = new DesktopClient({ dshHome, log });
+        await desktop.connect();
+        if (stopping) {
+          desktop.destroy();
+          return;
+        }
+        acp = desktop;
+        reconnectDelay = 1000;
+        log('使用桌面 DSH 传输（手机会话与桌面同源）');
+        return;
+      } catch (e) {
+        log(`桌面 DSH 传输不可用：${e?.message ?? e}`);
+        if (mode === 'desktop') {
+          scheduleReconnect(e);
+          return;
+        }
+        log('退回 ACP 传输');
+      }
+    }
+    connectAcp();
+  } finally {
+    connecting = false;
+  }
+}
+
+function connectAcp() {
   if (stopping) return;
   log(`启动 DSH（ACP profile）…`);
   let transport;

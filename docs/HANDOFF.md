@@ -5,6 +5,19 @@
 
 ---
 
+## 快照：2026-11-02 02:00（阶段 1：桌面 DSH 传输，手机会话与桌面同源）
+
+- 新增 `mobile-gateway/src/desktop-client.js`：与 AcpClient 同形，走桌面 DSH Web RPC
+  （`session/create` / `session/prompt` / `session/follow` + `$events` 审批回执）。
+- 选择：`DSH_MOBILE_TRANSPORT=auto`（默认，桌面在则 RPC、否则 ACP）/ `desktop` / `acp`。
+- 实测：网关 `desktop-dsh` 已连接；建会话立刻进 DSH 默认工作区；
+  SSE `hello → turn_start → text "OK" → turn_end ok`（1.8s）；模型为 `deepseek-v4.1-flash-sg`。
+- 已知边界：无逐字流式（完成后整段）；桌面换端口/启动晚于网关时不会自动重发现；
+  审批路径已实现未真机验证；问答自动回空答案。
+- 文档：case §32、PITFALLS「ACP 会话 DSH 不认领」。
+
+---
+
 ## 快照：2026-11-02 01:40（手机新建会话同步到 DSH：捷径失败，A 方案待做）
 
 - 实测：DSH `session/create` 能建会话（立刻可见），但 ACP **无法 resume 桌面建的会话**（Internal error）；
