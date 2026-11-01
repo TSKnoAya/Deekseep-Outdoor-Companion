@@ -3232,3 +3232,15 @@ B站/桌宠被迫读 QQ 规则；核心和日常没有边界。
   - 需要「两边都改过」的判断时用工作区：`git diff --name-only <base>`（不带 HEAD）；
   - 覆盖前先备份到临时目录（这次 HANDOFF/PITFALLS 备份了，RELEASE-QUEUE 没备份 → 丢了）。
 - **教训**：**HEAD 干净 ≠ 工作区干净**。任何「批量覆盖工作区」的脚本，判断依据必须是工作区状态。
+
+## 把 DSH 侧栏的「工作区列表」当会话总数 —— 它每组只预览一条
+
+- **现象**：手机列出 5 条会话，DSH 侧栏数起来只有 4 条，误以为手机多出来/数据不一致。
+- **根因**：DSH 侧栏每个工作区只渲染 **1 条最近会话**的预览；完整列表要点进工作区或在搜索里查。
+  外加「未分组」会把不属于任何工作区的会话集中展示，同样只预览一条。
+- **判据**：对比时看「点进工作区后的列表」，不要数侧栏预览行。
+- **附带坑**：手机早期会话的 cwd 是 `...\surfcore\mobile-gateway`，DSH 没登记这个工作区 →
+  它们只能落在「未分组」。补登记的办法：**完全退出 DSH** 后编辑
+  `~/.dsh/storages/workspace.json`（先备份），加一个 `{path,title,sessionIds,createdAt,updatedAt}` 条目
+  并把 id 追加进 `global.workspaceIds`；运行中写会被内存状态覆盖。
+  ACP 会话 id 是**纯 uuid**（与 `storages/session_projcache/sessions/<uuid>.json` 一致）。

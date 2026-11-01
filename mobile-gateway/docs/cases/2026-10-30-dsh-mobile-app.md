@@ -1644,3 +1644,51 @@ App：
 
 - 历史只取最后 200 条（`limit` 可调），更早的不显示。
 - 助手消息里的工具调用/思考块不展示，只保留文本。
+
+## 30. 2026-11-02 01:05 手机 5 条 / DSH 侧栏 4 条：侧栏只预览，不是总数
+
+### 30.1 现象
+
+手机下拉 5 条，DSH 左侧工作区列表看起来只有 4 条；用户以为手机多出会话。
+
+### 30.2 真相
+
+- DSH 侧栏**每个工作区只显示 1 条最近会话**（预览），不是完整会话列表；
+- 手机是平铺全部（非归档、非空）会话；
+- 「未分组」里的空会话（DSH 显示为「未命名」）被手机的空会话过滤隐藏——这是刻意的（用户要求手机不显示空会话）。
+
+### 30.3 还差的那部分：手机旧会话不在任何工作区
+
+手机早期创建的会话 cwd 是 `...\surfcore\mobile-gateway`，DSH 没有这个工作区，只能落在「未分组」，
+且侧栏只预览 1 条，另一条在桌面看不到。
+
+**处置（2026-11-02，用户同意）**：在 DSH **完全退出**后，直接给
+`~/.dsh/storages/workspace.json` 增加一个工作区条目：
+
+```json
+{
+  "path": "C:\Users\dfer5\Documents\deepseek-harness\default-workspace\surfcore\mobile-gateway",
+  "title": "手机网关",
+  "sessionIds": ["<该目录下 30 个会话 id，纯 uuid>"],
+  "createdAt": "...", "updatedAt": "..."
+}
+```
+
+并把新 id 追加进 `global.workspaceIds`；改前备份到 `~/.dsh/_backups/workspace.json.<ts>.bak`。
+DSH 启动后侧栏出现「手机网关」分组，点开能看到「你是金花吗？」「你记得今天群里说过什么吗？」（用户确认）。
+
+### 30.4 为什么必须关闭 DSH
+
+工作区注册表在 DSH 内存里，运行中写文件会被覆盖；改动前还停掉了网关（它会 spawn ACP 子进程）。
+会话 id 用**纯 uuid**（与 `~/.dsh/storages/session_projcache/sessions/<uuid>.json` 一致）。
+
+### 30.5 验证
+
+- 用户打开 DSH：侧栏出现「手机网关」，点开能看到那两条旧会话（已确认）。
+- 回滚：`copy ~/.dsh/_backups/workspace.json.<ts>.bak ~/.dsh/storages/workspace.json`（DSH 关闭时）。
+
+### 30.6 残余
+
+- 以后手机新建的会话仍进 `default-workspace`（`defaultCwd` 配置），不会长在「手机网关」组；
+  想让它们都归到「手机网关」，把 `defaultCwd` 指到该目录即可。
+- 侧栏预览规则是 DSH 的 UI 行为，手机保持平铺，不跟随。
