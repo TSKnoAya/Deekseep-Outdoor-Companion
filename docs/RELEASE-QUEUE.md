@@ -27,8 +27,10 @@
 - 撤回 §25 的手机侧独立归档：删除 `session-archive.js`、`POST /v1/sessions/:id/archive|unarchive`
   以及 App 的归档/恢复按钮与「显示已归档」开关。
 - 归档/取消归档统一在 DSH 桌面端做；手机只跟随，不反向写 DSH 状态（跨进程写无锁，风险大）。
+- 配置：网关 `defaultCwd` 指向 DSH 的 `default-workspace`（`~/.dsh/mobile-gateway/config.json`），
+  手机**新建**会话归入桌面已有工作区，两边列表从新会话开始同一批（旧会话仍在 mobile-gateway 目录）。
 
-**case**：[mobile-gateway/docs/cases/2026-10-30-dsh-mobile-app.md](../mobile-gateway/docs/cases/2026-10-30-dsh-mobile-app.md) §26（归档）、§27（空会话）
+**case**：[mobile-gateway/docs/cases/2026-10-30-dsh-mobile-app.md](../mobile-gateway/docs/cases/2026-10-30-dsh-mobile-app.md) §26（归档）、§27（空会话）、§28（工作区归属）
 
 **验证**：`node test/run-all.js` 202/202；`gradle assembleDebug` 成功并已装真机；
 未验证：真机下拉点击手感。

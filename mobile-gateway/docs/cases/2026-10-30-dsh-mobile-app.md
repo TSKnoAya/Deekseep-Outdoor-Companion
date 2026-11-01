@@ -1559,3 +1559,38 @@ App：默认过滤 archived；下拉底部「显示已归档（N）」可展开�
 App 在「上次会话没有任何消息」的情况下，会因为找不到 `lastSessionId` 而新建一个空会话——
 这些空会话现在也被列表过滤掉（不再显示），但文件会留在 ACP 工作区目录里。
 若以后觉得堆积，可改成「先尝试 resume 上次会话，失败再新建」。
+
+## 28. 2026-11-01 23:40 手机新建会话落到 DSH 工作区（两边列表同一批）
+
+### 28.1 问题
+
+手机会话的 cwd 是 `...\surfcore\mobile-gateway`，这个目录不在 DSH 登记的 3 个工作区里，
+所以它们在 DSH 桌面端**根本看不到**（手机 29 条、桌面 0 条），只能靠归档/空会话过滤勉强对齐。
+
+### 28.2 做法
+
+把网关的 `defaultCwd` 指到 DSH 已有工作区：
+
+```json
+// ~/.dsh/mobile-gateway/config.json
+{ "defaultCwd": "C:\Users\dfer5\Documents\deepseek-harness\default-workspace" }
+```
+
+- `session/new` 不带 cwd 时用 `meta.defaultCwd`（`src/server.js`），所以**手机新建的会话**会归到
+  `--C-Users-…-default-workspace--` 目录，DSH 的 default-workspace 列表里能直接看到；
+- 验证（临时网关 8791 实测）：新建会话落盘路径
+  `~/.dsh/sessions/--C-Users-dfer5-Documents-deepseek-harness-default-workspace--/<uuid>`。
+
+### 28.3 注意
+
+- 必须用**反斜杠**写路径：DSH 工作区记录的是 `C:\...`；正斜杠可能导致工作区匹配不上。
+- 只影响**新会话**；旧的 11 条（未归档、在 mobile-gateway 目录）仍在手机侧。
+  想让他们也出现在桌面：在 DSH 里把 `...\surfcore\mobile-gateway` 添加为工作区（UI 操作），
+  或忽略（它们只属于手机）。
+- 这是 `config.json` 的一个键，改回/删掉即回滚，重启网关生效。
+
+### 28.4 验证
+
+- 临时网关实测新会话目录正确（见 28.2）。
+- 网关已重启（当前运行版本包含 defaultCwd）。
+- 未验证：App 新建会话后在 DSH 桌面端刷新看到的实际观感。

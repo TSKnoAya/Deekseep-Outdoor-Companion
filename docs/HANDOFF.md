@@ -5,6 +5,18 @@
 
 ---
 
+## 快照：2026-11-01 23:40（手机新会话归入 DSH 工作区）
+
+- 问题：手机会话 cwd 是 `...\surfcore\mobile-gateway`，不在 DSH 的 3 个工作区里 → 桌面端看不到。
+- 做法：`~/.dsh/mobile-gateway/config.json` 增加
+  `defaultCwd = C:\Users\dfer5\Documents\deepseek-harness\default-workspace`（必须反斜杠），
+  手机**新建**会话即归入 DSH 的 default-workspace。
+- 验证：临时网关 8791 实测，新会话落盘在 `--C-Users-…-default-workspace--/<uuid>`。
+- 旧会话（11 条未归档）仍在 mobile-gateway 目录，桌面看不到；要显示需在 DSH 里把该目录加为工作区。
+- 文档：case §28。
+
+---
+
 ## 快照：2026-11-01 22:50（手机比 DSH 多两个空会话）
 
 - 定位：手机多出的两条是 `session-214caa84`（default-workspace）与 `session-46d8cd00`（state-agents），
