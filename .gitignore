@@ -76,3 +76,13 @@ dist/*.zip
 # 运行时安装证据（由更新流程写入安装目录，不进仓库）
 .installed-manifest.json
 .installed-meta.json
+
+# 语音包 / 本地模型：**不随仓库分发**，用户自备（接口见 src/voice/、mobile-gateway/src/voice/）
+# 本地 GPT-SoVITS 语音包约 11GB，且含个人音色素材，不能进公开仓库。
+/state/voice-packs/
+/voice-packs/
+*.onnx
+*.safetensors
+*.gguf
+*.pth
+*.ckpt

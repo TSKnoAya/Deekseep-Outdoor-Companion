@@ -40,6 +40,12 @@
 具体条款见 [LICENSE](LICENSE)（MIT）。手机网关用到的第三方素材与代码依赖署名见
 [mobile-gateway/THIRD_PARTY_NOTICES.md](mobile-gateway/THIRD_PARTY_NOTICES.md)。
 
+> **语音包不随本仓库分发（重要）**：仓库里只保留语音后端的**接口**（`src/voice/`、
+> `mobile-gateway/src/voice/`：云端 TTS、本地 TTS 占位、手机系统 TTS），
+> 任何语音包（参考音频、TTS/ASR 模型、个人音色）都**不进仓库**，需要用户自行准备。
+> 原因：本地 GPT-SoVITS 语音包约 **11GB**，且包含个人音色素材与第三方许可限制。
+> 手机端想用声音：云端 TTS（0MB，需联网与密钥）、系统 TTS（0MB），或把合成留在电脑上（0MB）。
+
 ---
 
 ## 让 DSH 自己装（也可以只发一条链接）

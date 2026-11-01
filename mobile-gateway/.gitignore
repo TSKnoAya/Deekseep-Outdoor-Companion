@@ -14,3 +14,10 @@ _dbg.*
 _dbg.log
 _test-run.log
 *.log
+
+# 本地语音包 / TTS/ASR 模型：不随仓库分发，用户自备
+models/
+*.onnx
+*.safetensors
+*.gguf
+*.pth
