@@ -9,7 +9,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
-import { buildFishContext, fishSignature, listCharacters, readCurrentCharacter } from '../src/fish-context.js';
+import { buildFishContext, fishSignature, listCharacters, readCurrentCharacter, readSurfCoreInfo } from '../src/fish-context.js';
 
 const HOME = 'C:\\Users\\bob\\.dsh';
 const SURF = path.join(HOME, 'surfcore');
@@ -176,4 +176,96 @@ test('签名随角色变化（切鱼后能触发重新注入）', () => {
   const b = fishSignature({ dshHome: HOME, characterId: 'char-2', fsLike });
   assert.ok(a.length > 0 && b.length > 0);
   assert.notEqual(a, b);
+});
+
+// ── 适配 SurfCore 0.8.8：注入上限跟配置走、能读版本、尊重"关闭记忆卡" ─────────
+
+function surfFiles({ promptChars = 1800, config, version = '0.8.8' } = {}) {
+  const files = {
+    [path.join(SURF, 'characters', 'current.json')]: JSON.stringify({
+      version: 1, id: 'char-1', name: '金花', dir: CHAR,
+    }),
+    [path.join(CHAR, 'persona.md')]: '# 金花\n- 性格：直爽',
+    [path.join(CHAR, 'memory', 'memory-card-prompt-qq.md')]: '记'.repeat(promptChars),
+    [path.join(CHAR, 'memory', 'memory-card.md')]: '完整记忆卡'.repeat(50),
+  };
+  if (config !== undefined) {
+    files[path.join(SURF, 'config.json')] = JSON.stringify(config);
+  }
+  if (version) {
+    files[path.join(HOME, 'plugins', 'surfcore', 'package.json')] = JSON.stringify({ version });
+  }
+  return fakeFs(files);
+}
+
+test('注入上限跟 SurfCore 的 injectMaxChars.qq 走（新版块 ~1850 字不能被 1200 截掉）', () => {
+  const fsLike = surfFiles({ config: { memoryCard: { injectMaxChars: { qq: 2200 } } } });
+  const r = buildFishContext({ dshHome: HOME, fsLike });
+  assert.equal(r.ok, true);
+  assert.equal(r.maxChars, 2200);
+  assert.equal(r.truncated, false);
+  assert.equal(r.memoryChars, 1800);
+});
+
+test('显式 maxChars 仍然优先于配置', () => {
+  const fsLike = surfFiles({ config: { memoryCard: { injectMaxChars: { qq: 2200 } } } });
+  const r = buildFishContext({ dshHome: HOME, fsLike, maxChars: 300 });
+  assert.equal(r.maxChars, 300);
+  assert.equal(r.truncated, true);
+  assert.match(r.text, /记忆还有更多/);
+});
+
+test('没有 config.json 时退到 2200（0.8.8 的默认值），不是老的 1200', () => {
+  const r = buildFishContext({ dshHome: HOME, fsLike: surfFiles() });
+  assert.equal(r.maxChars, 2200);
+  assert.equal(r.truncated, false);
+});
+
+test('能读到已装 SurfCore 的版本号（设置页要显示）', () => {
+  const info = readSurfCoreInfo({ dshHome: HOME, fsLike: surfFiles({ version: '0.8.8' }) });
+  assert.equal(info.version, '0.8.8');
+  assert.equal(info.memoryCardEnabled, true);
+});
+
+test('SurfCore 里把记忆卡关了 → 只注入人格，不塞记忆', () => {
+  const fsLike = surfFiles({ config: { memoryCard: { enabled: false, injectMaxChars: { qq: 2200 } } } });
+  const r = buildFishContext({ dshHome: HOME, fsLike });
+  assert.equal(r.ok, true);
+  assert.equal(r.memorySkipped, true);
+  assert.equal(r.memoryChars, 0);
+  assert.match(r.text, /## 角色：金花/);
+  assert.doesNotMatch(r.text, /记{10}/, '记忆块不该出现');
+});
+
+test('配置里 injectMaxChars 是脏值（0 / 字符串 / 负数）时不被采纳', () => {
+  const info = readSurfCoreInfo({
+    dshHome: HOME,
+    fsLike: surfFiles({ config: { memoryCard: { injectMaxChars: { qq: 0 } } } }),
+  });
+  assert.equal(info.injectMaxChars.qq, null);
+});
+
+// ── 旧布局兼容（没建角色、用 roles/角色卡.md 的老用户） ─────────────────
+
+test('没有角色系统时，读 roles/角色卡.md + 全局 memory 目录', () => {
+  const f = {
+    [path.join(SURF, 'roles', '角色卡.md')]: '# 老角色\n- 性格：冷淡',
+    [path.join(SURF, 'memory', 'memory-card-prompt-qq.md')]: '旧记忆',
+  };
+  const r = buildFishContext({ dshHome: HOME, fsLike: fakeFs(f) });
+  assert.equal(r.ok, true);
+  assert.equal(r.legacyLayout, true);
+  assert.equal(r.name, '老角色');
+  assert.match(r.text, /性格：冷淡/);
+  assert.match(r.text, /旧记忆/);
+});
+
+test('旧布局也认 config.json 里的 persona.file（相对 surfcore 根）', () => {
+  const f = {
+    [path.join(SURF, 'config.json')]: JSON.stringify({ persona: { file: 'roles/自定义.md' } }),
+    [path.join(SURF, 'roles', '自定义.md')]: '# 自定义\n- 性格：随和',
+  };
+  const r = buildFishContext({ dshHome: HOME, fsLike: fakeFs(f) });
+  assert.equal(r.ok, true);
+  assert.equal(r.name, '自定义');
 });

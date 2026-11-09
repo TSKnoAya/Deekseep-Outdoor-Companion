@@ -135,7 +135,7 @@ export class DeviceStore {
    * @param {string} params.deviceName
    * @returns {{deviceId:string, token:string}}
    */
-  pair({ code, deviceName }, now = Date.now()) {
+  pair({ code, deviceName, clientId }, now = Date.now()) {
     if (!this.pairCode) {
       throw fail(CODES.PAIR_CODE_EXPIRED, '还没有生成配对码', {
         hint: '让电脑端先生成配对码（设置 → 手机配对）。',
@@ -170,16 +170,35 @@ export class DeviceStore {
     this.pairCode = null;
     this.pairAttempts = 0;
     const token = makeToken();
+    const cid = String(clientId ?? '').trim().slice(0, 80) || null;
+    const name = String(deviceName || '未命名设备').slice(0, 60);
+
+    // 「同一台手机重装后重新配对」不该在列表里多一条。
+    // 靠 App 侧生成的稳定 clientId 认出是老面孔：保留 id 与首次配对时间，
+    // **换掉令牌**（旧令牌必须立刻失效，否则等于留了一把备份钥匙）。
+    if (cid) {
+      const existing = this.devices.find((d) => d.clientId === cid);
+      if (existing) {
+        existing.tokenHash = hashToken(token);
+        existing.name = name;
+        existing.lastSeenAt = null;
+        existing.repairedAt = now;
+        this._save();
+        return { deviceId: existing.id, token, replaced: true };
+      }
+    }
+
     const device = {
       id: `dev-${crypto.randomBytes(6).toString('hex')}`,
-      name: String(deviceName || '未命名设备').slice(0, 60),
+      name,
       tokenHash: hashToken(token),
       createdAt: now,
       lastSeenAt: null,
+      clientId: cid,
     };
     this.devices.push(device);
     this._save();
-    return { deviceId: device.id, token };
+    return { deviceId: device.id, token, replaced: false };
   }
 
   /**
@@ -195,6 +214,21 @@ export class DeviceStore {
       }
     }
     return null;
+  }
+
+  /**
+   * 给一台"老记录"补上 clientId（老版本配对时没有这个字段）。
+   *
+   * 只在原来为空时写：绝不覆盖已有 ID——那会让两台手机互相认成同一台。
+   */
+  adoptClientId(deviceId, clientId) {
+    const id = String(clientId ?? '').trim().slice(0, 80);
+    if (!id) return false;
+    const d = this.devices.find((x) => x.id === deviceId);
+    if (!d || d.clientId) return false;
+    d.clientId = id;
+    this._save();
+    return true;
   }
 
   /** 记录最近活跃（不每次都写盘，太频繁；由调用方按需节流）。 */

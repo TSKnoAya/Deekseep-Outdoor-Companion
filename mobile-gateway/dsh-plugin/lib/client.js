@@ -110,6 +110,19 @@ window.__ModuleLoader__.load({
         h("path", { d, fill: "#000" }));
     }
 
+    /** 设备列表里的"最后活跃"：刚刚 / N 分钟前 / N 小时前 / MM-DD HH:mm。 */
+    function relativeTime(ms) {
+      const t = Number(ms);
+      if (!t) return "时间未知";
+      const diff = Date.now() - t;
+      if (diff < 60_000) return "刚刚";
+      if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`;
+      if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`;
+      const d = new Date(t);
+      const pad = (n) => String(n).padStart(2, "0");
+      return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    }
+
     function Section() {
       const [status, setStatus] = useState(null);
       const [statusErr, setStatusErr] = useState("");
@@ -162,11 +175,23 @@ window.__ModuleLoader__.load({
           setPersona(null);
           setPersonaErr(p?.hint || p?.error || "读不到角色上下文状态");
         }
+        // 已配对设备：网络抖动时保留上次结果，只改错误提示
+        const dv = await api("/devices");
+        if (dv?.ok) {
+          setDevices(dv.devices || []);
+          setDevicesErr("");
+        } else {
+          setDevicesErr(dv?.hint || dv?.error || "读不到设备列表");
+        }
         setBusy("");
       }, []);
 
       const [persona, setPersona] = useState(null);
       const [personaErr, setPersonaErr] = useState("");
+      const [devices, setDevices] = useState([]);
+      const [devicesErr, setDevicesErr] = useState("");
+      /** 第一次点「吊销」只标记；第二次才真执行（不弹 confirm，WebView 里行为不一致） */
+      const [revokePending, setRevokePending] = useState("");
 
       useEffect(() => {
         refresh();
@@ -247,6 +272,23 @@ window.__ModuleLoader__.load({
           setErr("DSH 还在运行旧版插件（HTTP 405），请完全退出 DSH 再打开后重试。");
         } else {
           setErr(r?.hint || r?.error || "保存失败");
+        }
+      };
+
+      const revoke = async (id) => {
+        if (revokePending !== id) {
+          setRevokePending(id);
+          return;
+        }
+        setRevokePending("");
+        setErr("");
+        setNote("");
+        const r = await api("/devices/revoke", { method: "POST", body: JSON.stringify({ id }) });
+        if (r?.ok) {
+          setNote(`已吊销，剩余 ${r.remaining} 台。那台手机需要重新配对。`);
+          refresh();
+        } else {
+          setErr(r?.hint || r?.error || "吊销失败");
         }
       };
 
@@ -535,12 +577,61 @@ window.__ModuleLoader__.load({
                   h(Row, { k: "状态", v: persona.enabled ? "已开启" : "已关闭", tone: persona.enabled ? "#3fb950" : undefined }),
                   h(Row, { k: "角色", v: persona.character || "?" }),
                   h(Row, { k: "来源", v: persona.followingDesktop ? "跟随桌面当前角色" : "手机固定选择" }),
-                  h(Row, { k: "注入内容", v: `人格 ${persona.personaChars} 字 + 记忆 ${persona.memoryChars} 字${persona.truncated ? "（已截断）" : ""}` }),
+                  h(Row, { k: "SurfCore", v: persona.surfcoreVersion ? `v${persona.surfcoreVersion}` : "版本未知" }),
+                  h(Row, {
+                    k: "注入内容",
+                    v: persona.memorySkipped
+                      ? `人格 ${persona.personaChars} 字（记忆卡在 SurfCore 里已关闭，只送人格）`
+                      : `人格 ${persona.personaChars} 字 + 记忆 ${persona.memoryChars} 字 / 上限 ${persona.maxChars ?? "?"}${persona.truncated ? "（已截断）" : ""}`,
+                  }),
                   h(Row, { k: "已生效会话", v: (persona.sessions || []).length ? `${persona.sessions.length} 个` : "还没有（发第一条消息时生效）" }),
                   h("p", { style: { ...label, margin: "8px 0 0", lineHeight: 1.65 } },
                     "开启后，手机发的第一条消息会带上这条鱼的人格卡与记忆卡，此后它记得的事和 QQ 上是同一份。",
                     h("br"),
                     "第一轮之后不会每轮重复注入（省 token，也避免它把设定当成反复叮嘱）；电脑上的记忆更新时，会自动再注入一次。"))),
+
+        // ⑤ 已配对设备
+        h("div", { style: box },
+          h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" } },
+            h("strong", { style: { fontSize: "13px" } }, `⑤ 已配对设备（${devices.length}）`),
+            h("button", {
+              style: btn({ padding: "4px 10px", fontSize: "12px" }),
+              onClick: () => {
+                if (revokePending !== "__all__") { setRevokePending("__all__"); return; }
+                setRevokePending("");
+                api("/devices/revoke", { method: "POST", body: JSON.stringify({ all: true }) })
+                  .then((r) => {
+                    if (r?.ok) { setNote(`已清空 ${r.revoked} 台设备，之后每台手机都要重新配对。`); refresh(); }
+                    else setErr(r?.hint || r?.error || "清空失败");
+                  });
+              },
+              disabled: !running || devices.length === 0,
+            }, revokePending === "__all__" ? "再点一次确认清空" : "清空全部")),
+          h("p", { style: { ...label, margin: "4px 0 10px", lineHeight: 1.6 } },
+            "手机丢了、换机、或想清掉测试机时在这里吊销。吊销后那台手机要重新扫码配对；不影响正在用的其它设备。"),
+          devicesErr
+            ? h("div", { style: { ...label, margin: 0, color: "#d29922" } }, devicesErr)
+            : devices.length === 0
+              ? h("div", { style: { ...label, margin: 0 } }, "还没有配对的设备。")
+              : h("div", { style: { display: "grid", gap: "6px" } },
+                  devices.map((d) => h("div", {
+                    key: d.id,
+                    style: {
+                      display: "flex", alignItems: "center", gap: "10px",
+                      padding: "6px 8px", borderRadius: "8px",
+                      background: "rgba(127,127,127,.08)",
+                    },
+                  },
+                    h("div", { style: { flex: 1, minWidth: 0 } },
+                      h("div", { style: { fontSize: "12.5px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } },
+                        `${d.name || "未命名设备"}`),
+                      h("div", { style: { ...label, margin: 0, ...mono, fontSize: "11px", opacity: 0.75 } },
+                        `${d.id} · ${relativeTime(d.lastSeenAt || d.createdAt)}`)),
+                    h("button", {
+                      style: btn({ padding: "3px 9px", fontSize: "11.5px" }),
+                      onClick: () => revoke(d.id),
+                      disabled: revokePending !== "" && revokePending !== d.id,
+                    }, revokePending === d.id ? "确认吊销" : "吊销"))))),
 
         note ? h("div", { style: { padding: "9px 12px", borderRadius: "8px", background: "rgba(63,185,80,.12)", fontSize: "12.5px", whiteSpace: "pre-wrap", wordBreak: "break-word" } }, note) : null,
         (err || statusErr) ? h("div", { style: { padding: "9px 12px", borderRadius: "8px", background: "rgba(248,81,73,.12)", fontSize: "12.5px", marginTop: "8px", whiteSpace: "pre-wrap", wordBreak: "break-word" } }, err || statusErr) : null,

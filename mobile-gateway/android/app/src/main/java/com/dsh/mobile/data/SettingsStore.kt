@@ -68,6 +68,21 @@ class SettingsStore(context: Context) {
             e.apply()
         }
 
+    /**
+     * 稳定的「安装 ID」：第一次运行生成，之后一直不变（重装/清数据才会换）。
+     *
+     * 作用不是识别用户（它不含任何设备信息），而是让网关认出
+     * **"这还是刚才那台手机"** —— 重装后重新配对时替换旧记录，
+     * 而不是在「已配对设备」里再堆一条。每次配对都会换新令牌，旧的立刻失效。
+     */
+    val installId: String
+        get() {
+            prefs.getString(KEY_INSTALL_ID, null)?.takeIf { it.isNotBlank() }?.let { return it }
+            val fresh = java.util.UUID.randomUUID().toString()
+            prefs.edit().putString(KEY_INSTALL_ID, fresh).apply()
+            return fresh
+        }
+
     /** 最近一次用的会话 id（让 App 重启后回到同一个对话）。 */
     var lastSessionId: String?
         get() = prefs.getString(KEY_SESSION, null)
@@ -99,6 +114,7 @@ class SettingsStore(context: Context) {
         private const val KEY_BASE_URL = "base_url"
         private const val KEY_TOKEN = "device_token"
         private const val KEY_DEVICE_ID = "device_id"
+        private const val KEY_INSTALL_ID = "install_id"
         private const val KEY_SESSION = "last_session"
         private const val KEY_ASR = "asr_backend"
         private const val KEY_ANNOUNCE = "announce_mode"

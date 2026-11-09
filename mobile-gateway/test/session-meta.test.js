@@ -203,3 +203,50 @@ test('普通用户消息原样保留（不因为以符号开头就被吞）', as
   const raw = JSON.stringify({ type: 'user/message', data: { text: '<div>怎么改这个标签？' } });
   assert.equal(extractHistory(raw).messages[0].text, '<div>怎么改这个标签？');
 });
+
+// ── 历史：助手正文在 data.message.content[]，系统文本是伪 user/message ──────
+
+test('助手正文取自 data.message.content[]，只拼 text 不拼 reasoning', async () => {
+  const { extractHistory } = await import('../src/session-meta.js');
+  const raw = JSON.stringify({
+    type: 'assistant/message',
+    data: {
+      message: {
+        role: 'assistant',
+        content: [
+          { type: 'reasoning', text: '这是思考过程，不该给用户看' },
+          { type: 'text', text: '章鱼有三颗心脏。' },
+          { type: 'tool-call', name: 'bash' },
+        ],
+      },
+    },
+  });
+  const msgs = extractHistory(raw).messages;
+  assert.equal(msgs.length, 1);
+  assert.equal(msgs[0].role, 'assistant');
+  assert.equal(msgs[0].text, '章鱼有三颗心脏。');
+  assert.doesNotMatch(msgs[0].text, /思考过程/);
+});
+
+test('只有 reasoning 的助手消息不产生空气泡', async () => {
+  const { extractHistory } = await import('../src/session-meta.js');
+  const raw = JSON.stringify({
+    type: 'assistant/message',
+    data: { message: { role: 'assistant', content: [{ type: 'reasoning', text: '嗯…' }] } },
+  });
+  assert.equal(extractHistory(raw).messages.length, 0);
+});
+
+test('历史里丢掉 DSH 写进来的运行时上下文（真机：重启后被渲染成一条消息）', async () => {
+  const { extractHistory } = await import('../src/session-meta.js');
+  const line = (text) => JSON.stringify({ type: 'user/message', data: { content: [{ type: 'text', text }] } });
+  const raw = [
+    line('说来听听'),
+    line('Current runtime context. This snapshot supersedes earlier runtime-context snapshots.'),
+    line('<system-reminder>\nA skill is a reusable set…'),
+    line('Time sampled while preparing turn 1, step 1: 2026-11-10T07:07:17+08:00[Asia/Shanghai]'),
+    line('Browser time zone for this request: unavailable.'),
+  ].join('\n');
+  const msgs = extractHistory(raw).messages;
+  assert.deepEqual(msgs.map((m) => m.text), ['说来听听']);
+});

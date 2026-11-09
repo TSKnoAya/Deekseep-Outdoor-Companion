@@ -1,6 +1,7 @@
 package com.dsh.mobile.net
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -31,6 +32,13 @@ import java.util.concurrent.TimeUnit
 class GatewayClient(
     @Volatile var baseUrl: String,
     @Volatile var token: String?,
+    /**
+     * 稳定安装 ID（可为空：配对之前还不知道）。
+     *
+     * 每个鉴权请求都带 `X-Client-Id`，网关会拿它给"老记录"补登记，
+     * 这样即使这台手机是在有 clientId 之前配对的，下次重装重扫也不会多出一条。
+     */
+    @Volatile var clientId: String? = null,
 ) {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
@@ -51,6 +59,7 @@ class GatewayClient(
     private fun authed(path: String): Request.Builder {
         val builder = Request.Builder().url(url(path))
         token?.takeIf { it.isNotBlank() }?.let { builder.header("Authorization", "Bearer $it") }
+        clientId?.takeIf { it.isNotBlank() }?.let { builder.header("X-Client-Id", it) }
         return builder
     }
 
@@ -119,12 +128,14 @@ class GatewayClient(
      * 配对。成功后要把 token 存下来——这里只返回，存储由调用方负责
      * （方便换存储实现，也方便测试）。
      */
-    fun pair(code: String, deviceName: String): PairResult {
+    fun pair(code: String, deviceName: String, clientId: String? = null): PairResult {
         val res = postJson(
             "/v1/pair",
             buildJsonObject {
                 put("code", code.trim())
                 put("deviceName", deviceName)
+                // 让网关认出"还是这台手机"：重装后重新配对会替换旧记录，不再堆一条
+                if (!clientId.isNullOrBlank()) put("clientId", clientId)
             },
         )
         val id = res["deviceId"]?.jsonPrimitive?.content
@@ -143,6 +154,31 @@ class GatewayClient(
             dshConnected = dsh?.get("connected")?.jsonPrimitive?.content?.toBoolean() ?: false,
             dshName = dsh?.get("server")?.jsonObject?.get("name")?.jsonPrimitive?.content,
         )
+    }
+
+    /** 未读的主动消息。拉不到就返回空——不能因为这个把开屏搞挂。 */
+    fun listOutreach(): List<OutreachItem> {
+        val res = getJson("/v1/outreach")
+        val arr = res["items"] as? JsonArray ?: return emptyList()
+        return arr.mapNotNull { el ->
+            val o = el as? JsonObject ?: return@mapNotNull null
+            val id = o["id"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+            OutreachItem(
+                id = id,
+                text = o["text"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null,
+                at = o["at"]?.jsonPrimitive?.contentOrNull?.toLongOrNull() ?: 0L,
+                source = o["source"]?.jsonPrimitive?.contentOrNull,
+                character = o["character"]?.jsonPrimitive?.contentOrNull,
+            )
+        }
+    }
+
+    /** 确认已读（服务端据此清空，别重复补发）。 */
+    fun ackOutreach(ids: List<String>) {
+        if (ids.isEmpty()) return
+        postJson("/v1/outreach/ack", buildJsonObject {
+            put("ids", kotlinx.serialization.json.JsonArray(ids.map { kotlinx.serialization.json.JsonPrimitive(it) }))
+        })
     }
 
     fun listSessions(): List<SessionInfo> {
@@ -273,6 +309,15 @@ data class SessionInfo(
 
 /** 历史消息：role = "user" | "assistant" */
 data class HistoryMessage(val role: String, val text: String)
+
+/** 它在别处（QQ / 桌宠）主动说过的一句话，手机打开时补给你看。 */
+data class OutreachItem(
+    val id: String,
+    val text: String,
+    val at: Long,
+    val source: String?,
+    val character: String?,
+)
 
 data class SendResult(val turnId: String, val queued: Int)
 

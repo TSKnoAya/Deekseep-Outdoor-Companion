@@ -31,6 +31,7 @@ import { createFishInjector } from './fish-inject.js';
 import { createDshArchive } from './dsh-archive.js';
 import { DesktopClient } from './desktop-client.js';
 import { createSessionMeta } from './session-meta.js';
+import { createOutreachStore } from './outreach.js';
 import { parseArgs, usage, isLoopbackHost, isTailscaleIp, lanAddresses } from './cli.js';
 import { CODES, fail } from './errors.js';
 
@@ -263,6 +264,12 @@ const server = createGatewayServer({
   tts,
   settings,
   log,
+  // 主动搭话的补发收件箱：读 SurfCore 的 purpose-outreach.json，把"它在别处说过的话"补到手机
+  outreach: createOutreachStore({
+    file: path.join(config.stateDir, 'outreach.json'),
+    dshHome,
+    log,
+  }),
   // 会话列表的标题/时间：读 DSH 的 sessions 目录（只读，带 mtime 缓存）
   sessionMeta: createSessionMeta({ dshHome }),
   // 手机侧跟随 DSH 的归档状态（只读 workspace.json，不跨进程写）

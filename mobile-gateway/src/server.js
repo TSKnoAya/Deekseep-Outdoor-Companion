@@ -82,6 +82,10 @@ export function createGatewayServer(deps) {
       if (pathname === '/admin/reload' && req.method === 'POST') return handleAdminReload(req, res);
       if (pathname === '/admin/acp-model' && req.method === 'GET') return handleAdminGetModel(req, res);
       if (pathname === '/admin/acp-model' && req.method === 'PUT') return handleAdminPutModel(req, res);
+      if (pathname === '/admin/outreach' && req.method === 'GET') return handleAdminOutreachList(req, res);
+      if (pathname === '/admin/outreach' && req.method === 'POST') return handleAdminOutreach(req, res);
+      if (pathname === '/admin/devices' && req.method === 'GET') return handleAdminDevices(req, res);
+      if (pathname === '/admin/devices/revoke' && req.method === 'POST') return handleAdminRevoke(req, res);
       if (pathname === '/admin/persona' && req.method === 'GET') return handleAdminGetPersona(req, res);
       if (pathname === '/admin/persona' && req.method === 'PUT') return handleAdminPutPersona(req, res);
       return sendJson(res, toFailure(fail(CODES.NOT_FOUND, `没有这个管理接口：${pathname}`, {})), 404);
@@ -124,6 +128,10 @@ export function createGatewayServer(deps) {
     const approveMatch = pathname.match(/^\/v1\/approvals\/([^/]+)$/);
     if (approveMatch && req.method === 'POST') return handleAnswerApproval(req, res, decodeURIComponent(approveMatch[1]));
 
+    // 主动搭话的补发收件箱：打开 App 时拉一次，看完 ack
+    if (pathname === '/v1/outreach' && req.method === 'GET') return handleOutreach(req, res);
+    if (pathname === '/v1/outreach/ack' && req.method === 'POST') return handleOutreachAck(req, res);
+
     if (pathname === '/v1/asr' && req.method === 'POST') return handleAsr(req, res);
     if (pathname === '/v1/tts' && req.method === 'POST') return handleTts(req, res);
     if (pathname === '/v1/voice/backends' && req.method === 'GET') return handleVoiceBackends(req, res);
@@ -143,7 +151,15 @@ export function createGatewayServer(deps) {
     const header = String(req.headers.authorization ?? '');
     const token = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
     if (!token) return null;
-    return deps.devices.verify(token);
+    const device = deps.devices.verify(token);
+    if (!device) return null;
+    // 老版本配对时还没有 clientId：让它在下一次正常请求时补登记。
+    // 不补的话，"重装后重扫"仍然会多出一条（老记录认不出自己）。
+    const cid = String(req.headers['x-client-id'] ?? '').trim().slice(0, 80);
+    if (cid && !device.clientId && typeof deps.devices.adoptClientId === 'function') {
+      deps.devices.adoptClientId(device.id, cid);
+    }
+    return device;
   }
 
   // ── 各端点实现 ──────────────────────────────────────────────────────────
@@ -237,6 +253,72 @@ export function createGatewayServer(deps) {
     sendJson(res, ok(result ?? { reloaded: true }));
   }
 
+  /** 未读的主动消息（打开 App 时拉）。 */
+  function handleOutreach(req, res) {
+    if (!deps.outreach) return sendJson(res, ok({ items: [] }));
+    sendJson(res, ok({ items: deps.outreach.pending() }));
+  }
+
+  async function handleOutreachAck(req, res) {
+    if (!deps.outreach) return sendJson(res, ok({ removed: 0, remaining: 0 }));
+    const body = await readJson(req, MAX_JSON_BODY);
+    const ids = Array.isArray(body.ids) ? body.ids : (body.id ? [body.id] : []);
+    sendJson(res, ok(deps.outreach.ack(ids)));
+  }
+
+  /** 调试用：看看队列里还剩什么（界面上不用）。 */
+  function handleAdminOutreachList(req, res) {
+    if (!deps.outreach) return sendJson(res, ok({ items: [] }));
+    sendJson(res, ok({ items: deps.outreach.pending(), ...deps.outreach.status() }));
+  }
+
+  async function handleAdminOutreach(req, res) {
+    requireThat(Boolean(deps.outreach), CODES.BAD_REQUEST, '这个网关版本没有主动消息收件箱', {});
+    const body = await readJson(req, MAX_JSON_BODY);
+    const text = String(body.text ?? '').trim();
+    requireThat(Boolean(text), CODES.BAD_REQUEST, 'text 不能为空', {});
+    const item = deps.outreach.append({
+      text,
+      at: Date.now(),
+      source: String(body.source ?? 'manual'),
+      character: body.character ?? null,
+    });
+    sendJson(res, ok({ item }));
+  }
+
+  /**
+   * 已配对设备列表。
+   *
+   * 为什么不复用 `/v1/devices`：那个要设备令牌，而"在手机上管理已配对设备"
+   * 本身就是悖论——设备丢了才需要吊销。所以走 `/admin/*`（仅本机回环）。
+   */
+  function handleAdminDevices(req, res) {
+    const devices = deps.devices.list().sort((a, b) => (b.lastSeenAt ?? b.createdAt ?? 0) - (a.lastSeenAt ?? a.createdAt ?? 0));
+    sendJson(res, ok({ devices, total: devices.length }));
+  }
+
+  async function handleAdminRevoke(req, res) {
+    const body = await readJson(req, MAX_JSON_BODY);
+    const id = String(body.id ?? '').trim();
+    // 先判 all：清空时本来就没有 id，不能先被"缺 id"拦掉（单测抓到的）
+    if (body.all === true) {
+      const n = deps.devices.list().length;
+      for (const d of deps.devices.list()) {
+        try {
+          deps.devices.revoke(d.id);
+        } catch {
+          /* 已经没了 */
+        }
+      }
+      log(`已吊销全部 ${n} 台设备`);
+      return sendJson(res, ok({ revoked: n, remaining: deps.devices.list().length }));
+    }
+    requireThat(Boolean(id), CODES.BAD_REQUEST, '要吊销哪台设备？传 id（或用 all=true 清空）', {});
+    const out = deps.devices.revoke(id);
+    log(`已吊销设备 ${id}`);
+    sendJson(res, ok(out));
+  }
+
   /**
    * 角色上下文（「把鱼带到手机」）的开关与状态。
    *
@@ -317,8 +399,10 @@ export function createGatewayServer(deps) {
     const result = deps.devices.pair({
       code: body.code,
       deviceName: body.deviceName ?? req.headers['user-agent'] ?? '手机',
+      // App 生成的稳定安装 ID：同一台手机重装后重新配对，不会在列表里多一条
+      clientId: body.clientId,
     });
-    log(`新设备配对成功：${result.deviceId}`);
+    log(result.replaced ? `设备重新配对（已替换旧令牌）：${result.deviceId}` : `新设备配对成功：${result.deviceId}`);
     sendJson(res, ok(result));
   }
 

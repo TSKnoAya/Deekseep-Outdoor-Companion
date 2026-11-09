@@ -1779,3 +1779,283 @@ DSH 侧栏（「未命名」），导致“两边条数又不一样了”。
 ### 33.4 残余
 
 - 用户发第一条消息时仍会新建会话（这是预期，DSH 会多出对应的一条真实对话）。
+
+---
+
+## 20. 2026-11-08 15:40–15:50 适配 SurfCore 0.8.8
+
+SurfCore 从 0.8.0 走到 0.8.8，注入侧有三处实质变化，我们原来的实现会**静默截断**新版记忆块。
+
+### 20.1 新版变了什么（实测对比）
+
+| 项 | 0.8.0（10-31） | 0.8.8（11-08） |
+| --- | --- | --- |
+| `memory-card-prompt-qq.md` | 986 B ≈ 448 字 | **1846 字** |
+| 新增小节 | — | 「QQ 与群里的记忆」「正在模糊的事」，末尾多一段"称呼只属于说这句话的人" |
+| 注入上限 | 我们写死 1200 | 配置 `memoryCard.injectMaxChars.qq = 2200` |
+| 新文件 | — | `memory-card-prompt-qq-groups.json`（分群块）、`memory-inbox.jsonl`（追加式收件箱） |
+| 人格卡 | `characters/<id>/persona.md` | 同上；旧布局 `persona.file` / `roles/角色卡.md` 仍支持 |
+
+**问题**：1846 > 1200 → 原来的默认上限会把新版记忆块截掉三分之一，鱼会"莫名失忆"，
+而且不报错。
+
+### 20.2 改了什么
+
+| 改动 | 落点 |
+| --- | --- |
+| 上限跟 SurfCore 配置走（`injectMaxChars.qq/bili`），默认值 1200 → **2200** | `src/fish-context.js` 新增 `readSurfCoreInfo()` |
+| 尊重 `memoryCard.enabled === false`：只送人格、不送记忆 | 同上，返回 `memorySkipped` |
+| 读已装版本号（`~/.dsh/plugins/surfcore/package.json`） | 同上，返回 `surfcoreVersion` |
+| 旧布局兼容：没有角色系统时读 `persona.file` / `roles/角色卡.md` / `roles/*.md` + 全局 `memory/` | 新增 `resolveLegacyPersona()` / `personaName()` |
+| 脏配置不被采纳（0、负数、非数字 → 当没配） | `toCap()` |
+| 设置页 ④ 显示「SurfCore v0.8.8」「记忆 1845 / 上限 2200」 | `dsh-plugin/lib/client.js` |
+
+表达式优先级：**显式参数 > SurfCore 配置 > 2200**。
+
+### 20.3 验证
+
+单测 212/212（fish-context 新增 8 条：配置上限、显式覆盖、默认 2200、版本号、
+关记忆卡、脏值、旧布局两种）。
+
+真实环境（金花 / SurfCore 0.8.8）：
+
+```
+surfcoreVersion 0.8.8 | maxChars 2200 | personaChars 467 | memoryChars 1845 | truncated false
+```
+
+端到端跑了一轮（**另起一个 `DSH_MOBILE_PERSONA=1` 的临时网关，不碰用户当前的关闭状态**）：
+
+```
+问：你还记得我 11-08 跟你聊过武器挂在手上那个问题吗？
+答：金花记得……当时是说先把武器父级到手掌骨，或者加个 Child Of 约束让它跟着手走，您试试看？
+```
+
+「父级到手掌骨 / Child Of」只存在于记忆卡 11-08 那条——说明新版 1846 字的块完整进了上下文，
+语气也还是金花。验证完临时网关已关闭。
+
+### 20.4 下一步可用的正门
+
+0.8.8 新增的 `memory-inbox.jsonl` 是**给外部平台追加事件用的收件箱**（B 站就是这么接的）。
+将来做「手机回写」应该往它 append（带 platform 标签），而不是改写 `memory-card.json`——
+这和 §17 定的"单一写入者"一致，且不用碰 SurfCore 的衰减/合并逻辑。
+
+---
+
+## 21. 2026-11-10 06:47 补装「启动不再自动建会话」
+
+11-02 那次装 APK 是 `02:14:55`，而修复提交 `5eac02a` 是 `02:15` —— **差 1 分钟，没装上**。
+于是手机上一直带着"每次打开 App 就凭空多一条空会话"的毛病（会话列表里的「（空会话）」多半就是它）。
+
+### 21.1 做了什么
+
+- 用恢复后的源码重新构建（`gradle assembleDebug`，1m29s，APK 19.8MB —— 比 17.9MB 大是因为
+  `e4f11da` 加了扫码配对，CameraX 依赖进来了）；
+- `adb install -r -d` 覆盖安装：`lastUpdateTime=2026-11-10 06:49:43`（已确认不是 11-02 那版）。
+
+### 21.2 验证方式：数字，不靠眼
+
+手机锁屏截不到图，所以用**会话数**验证（网关 `/v1/sessions`）：
+
+```
+App 关闭时: 10
+App 启动后: 10
+再等 6 秒: 10
+```
+
+启动前后不变 → 确实没有自动建会话。改动前这种操作会 +1（列表里多一条「（空会话）」）。
+
+### 21.3 顺带发现（状态变化，不是本次改的）
+
+网关现在连的是 **`desktop-dsh`（`server.version: rpc`）**，不再是 `deepseek-harness-acp`，
+`/v1/sessions` 返回的是桌面上那 10 个会话 —— 也就是说 11-02 那个「桌面 DSH 传输（阶段 1）」
+已经生效：**手机和桌面同源**，不再是两条独立的 DSH 进程。
+
+> 这条会影响后续设计：桌面侧的"单一写入者"现在天然成立（同一个 DSH 进程），
+> 之前 §19 担心的"两个进程各写各的"问题不存在了。
+
+---
+
+## 22. 2026-11-10 06:55–07:10 收尾三件：设备管理 / 开源文档 / 主动搭话
+
+### 22.1 设备管理
+
+`DeviceStore` 本来就有 `revoke()`，只是没有对外入口——而"在手机上管理已配对设备"本身就是悖论
+（设备丢了才需要吊销），所以走 `/admin/*`（仅本机回环）：
+
+| 接口 | 作用 |
+| --- | --- |
+| `GET /admin/devices` | 列表（按最后活跃倒序，**不返回 tokenHash**） |
+| `POST /admin/devices/revoke {id}` | 吊销单台 |
+| `POST /admin/devices/revoke {all:true}` | 清空 |
+
+插件设置页新增 **⑤ 已配对设备**：每行显示名字 / id / 最后活跃，点一次变「确认吊销」再点才执行
+（不弹 `confirm`，WebView 里行为不一致）；「清空全部」同样二次确认。
+
+**一个真 bug**（单测抓到）：`revoke` 先校验 `id` 再判 `all`，导致"清空"永远 400。
+已把 `all` 分支挪到校验之前。
+
+**实战清理**：27 台 → 2 台。规则：先按测试命名吊销（`verify-*` / `*-test` / `adb-verify` …），
+再按 `lastSeenAt` 判断——真正在用的是 `dev-e63cb976d9e1`（最后活跃 06:50），
+刚扫码产生的是 `dev-be48730789c1`（从未活跃，因为扫码不触发认证请求）。其余同一部手机的
+历史重复配对全部吊销。**保留这两台**，否则用户手机就要重新扫。
+
+### 22.2 开源文档
+
+新增：
+
+| 文件 | 内容 |
+| --- | --- |
+| `README.md` | 是什么、架构图、两条传输（桌面 RPC / ACP）、快速开始、构建、配置表、目录、测试、**诚实限制清单**、许可 |
+| `docs/INSTALL.md` | 十分钟上手 + 排错（`after 10000ms` = 防火墙 / `refused` = 没启动、DSH 未连接三因、扫不到码、空会话、角色找不到）+ 卸载回滚表 |
+| `LICENSE` | MIT（与仓库根一致），并注明美术不是 MIT |
+
+顺手修了 `package.json`：`test` 从 `node --test test/`（会 fork，且把挂起用例判 cancelled）
+改成 `node test/run-all.js`；`engines` 提到 `>=22.15`（会话标题用到 `zstdDecompressSync`）；
+补 `license: MIT`。仍保留 `private: true`——这个包不发 npm，是随仓库分发的子工程。
+
+### 22.3 主动搭话（打开 App 时补发）
+
+**没有**做"网关自己编一句开场"——那是假装它想你了。真正的主动消息由 SurfCore 的目的机制发出
+（QQ / 桌宠 / B 站），手机要做的是**把它在别处说过的话补给你看**：
+
+```
+SurfCore purpose-outreach.json 的 lastText + lastSentAt
+        │（每次打开 App 时 sync，只认 lastSentAt 变大）
+        ▼
+   outreach.json 收件箱（最多 50 条）
+        │  GET /v1/outreach
+        ▼
+   手机插进对话 → POST /v1/outreach/ack
+```
+
+- 判据是 `lastSentAt` 而不是文件 mtime：那个文件每个 tick 都在重写（drives/nextFireAt 在变）；
+- `lastText` 为空（只是 tick，没真说话）不入队；
+- 落盘保留，重启网关不丢；
+- 另外留了 `POST /admin/outreach {text}`，将来别的载体可以直接塞。
+
+App 侧：`pullOutreach()` 在连上后拉一次，插成助手消息并标注「它在电脑那边主动说的」，
+然后 ack（否则每次开 App 都重放）。
+
+**验证**（真机 + 真网关）：
+
+```
+塞一条  → /admin/outreach pending = 1
+开 App  → pending = 0        ← App 拉走并 ack 了
+logcat  → 无 FATAL
+```
+
+单测 223/223（outreach 7 条：去重、空文本、落盘、上限 50、老布局跳过）。
+
+---
+
+## 23. 2026-11-10 07:17 重启后"回复消失、冒出一条系统文本"——两个 bug 叠在一起
+
+用户描述得很准：**模型之前回答过，重启 App 才出现这个现象**。顺着这句查到了两个独立 bug。
+
+### 23.1 现场
+
+截图里只剩两条：用户「说来听听」+ 一条
+`Time sampled while preparing turn 1, step 1: … Browser time zone for this request: unavailable. …`
+——真正的回答（章鱼三颗心脏）不见了。
+
+翻 `session-6fbef57d…/session.v4.jsonl.zstd` 的原始事件（145 条）：
+
+```
+#9  user/message      '说来听听'
+#10 user/message      'Current runtime context. This snapshot supersedes …'
+#11 user/message      '<system-reminder>\nA skill is a reusable set …'
+#12 user/message      'Time sampled while preparing turn 1, step 1: …'
+#17 assistant/message data.message.content = [{type:'reasoning'},{type:'text'},…]
+```
+
+### 23.2 bug ①：DSH 把运行时上下文写成 `user/message`
+
+`Current runtime context` / `<system-reminder>` / `Time sampled…` 全都是**用户消息事件**。
+我们的过滤只认前两种，第三种漏了 → 被当成用户说的话渲染出来。
+
+### 23.3 bug ②：助手正文读错字段（这条才是"回复消失"的主因）
+
+助手消息的结构是 `data.message.content[]`，真正的回答只是其中 `type:'text'` 那一块
+（同批还有 18 个 reasoning、22 个 tool-call）。我们读的是 `data.content`
+（那是**用户**消息的结构）→ 取不到 → **整条助手消息被丢弃**，历史里只剩用户那半句。
+
+所以观感上"它刚才明明回答了，重启后没了"。
+
+### 23.4 修法
+
+| 位置 | 改动 |
+| --- | --- |
+| `assistantText()`（新增） | 从 `data.message.content[]` 只取 `type:'text' / 'output_text'`，**绝不拼 reasoning**（那是思考过程，不该出现在对方手机上） |
+| `cleanUserText()` / `userMessageText()` | 增加 `Time sampled…` / `Browser time zone…` / `Elapsed since…` / `This snapshot supersedes…` 四条判定 |
+| 顺手收窄 | 原先把"以 `<` 开头"一律当系统文本，会误吞用户真的发的 `<div>怎么改这个标签？`；现在只认 `<system-reminder|skill_content|available_skills>` |
+
+### 23.5 验证
+
+真实会话文件直接跑（不经 HTTP）：
+
+```
+历史条数 = 2
+  user      "说来听听"
+  assistant "行，那我随便讲一个——章鱼有三颗心脏…"
+```
+
+真机重启 App 后截图：用户「说来听听」+ 章鱼那段完整回答，**没有 Time sampled 那条**。
+
+单测 226/226（新增 3 条：助手正文只取 text、只有 reasoning 不产生空气泡、运行时上下文被丢弃）。
+
+> 教训：**会话日志里的 `user/message` 不等于"用户说的话"**，`data.content` 也不等于
+> "助手说的话"。schema 必须按事件类型分别读，不能一个 `textOf` 走天下。
+
+---
+
+## 24. 2026-11-10 07:23 配对去重：安装 ID（clientId）
+
+### 24.1 问题
+
+每次配对都 `push` 一条设备记录，不认"还是这台手机"。所以重装 / 重扫一次就多一条——
+27 台里 11 台是同机历史重复，就是这么来的。
+
+### 24.2 做法
+
+```
+App 首次运行 → 生成 UUID 存 EncryptedSharedPreferences(install_id)
+             → 配对请求带 clientId；之后每个鉴权请求带 X-Client-Id
+                        │
+网关 pair()  → 找到同 clientId 的记录 → 保留 id / createdAt，**换 tokenHash**，replaced=true
+             → 找不到 → 新增（老客户端不带 clientId 时保持旧行为）
+authenticate() → 老记录没有 clientId 且请求头带了 → adoptClientId() 补登记
+```
+
+三个刻意的决定：
+
+| 决定 | 为什么 |
+| --- | --- |
+| 复用同一条记录、只换令牌 | 设备 id 稳定，历史日志/界面不会跳；**旧令牌立刻失效**（不留备份钥匙） |
+| 认 `clientId` 而不是设备名 | 两台同型号手机（都叫 `24117RK2CC`）不能被合并成一台 |
+| 认证时补登记 | 现在这台手机是在有 clientId 之前配对的，不补的话"第一次重扫"仍会多一条 |
+
+App 侧 installId 只是随机 UUID，不采集任何设备信息；重装/清数据才会变——这正是"同一次安装"的语义。
+
+### 24.3 验证（三层）
+
+单测 229/229（新增 3 条：同 clientId 两次配对只 +1 且旧令牌 401、不同 clientId 各占一条、
+老客户端不带 clientId 时保持旧行为）。
+
+真实网关（curl 模拟两次配对）：
+
+```
+第一次 pairing → deviceId=dev-dd040e58f0ac replaced=False
+第二次 pairing → deviceId=dev-dd040e58f0ac replaced=True      ← 同一条
+设备列表 total = 2（用户手机 + 验证机）→ 验证机已删，剩 1
+```
+
+真机（装上新 APK 后，老记录自动补登记）：
+
+```json
+{ "id": "dev-be48730789c1", "clientId": "c415c2ce-98d8-4e69-a7de-56f2c97550e1" }
+```
+
+### 24.4 用户侧要验的一件事
+
+**卸载重装 App → 重新扫码 → 设备列表应该仍是 1 台，且 id 不变。**
+（覆盖安装不算"重装"：令牌和 installId 都还在，不会走配对流程。）

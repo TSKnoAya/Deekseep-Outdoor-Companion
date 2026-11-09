@@ -168,6 +168,26 @@ export function apply(ctx) {
    * 插件只做转发：真正读文件、决定注入时机的是网关——
    * 因为只有网关知道「这一轮是第几轮」「上一个前缀还在不在上下文里」。
    */
+  /** 已配对设备（列出 / 吊销）。丢了手机或换机时用。 */
+  route('GET', `${API}/devices`, async () => {
+    const { body } = await callGateway('/admin/devices');
+    if (!body?.ok) throw fail('gateway.error', body?.error ?? '读不到设备列表', {});
+    return body;
+  });
+
+  route('POST', `${API}/devices/revoke`, async (req) => {
+    const payload = await readBody(req);
+    const all = payload?.all === true;
+    const id = String(payload?.id ?? '').trim();
+    requireThat(all || Boolean(id), CODES.BAD_REQUEST, '要传 id，或用 all=true 清空', {});
+    const { body } = await callGateway('/admin/devices/revoke', {
+      method: 'POST',
+      body: JSON.stringify(all ? { all: true } : { id }),
+    });
+    if (!body?.ok) throw fail('gateway.error', body?.error ?? '吊销失败', { hint: body?.hint ?? '' });
+    return body;
+  });
+
   route('GET', `${API}/persona`, async () => {
     const { body } = await callGateway('/admin/persona');
     if (!body?.ok) throw fail('gateway.error', body?.error ?? '读不到角色上下文状态', {});

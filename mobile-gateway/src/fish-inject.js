@@ -165,6 +165,11 @@ export function createFishInjector(options = {}) {
         characters: characterList().map((c) => ({ id: c.id, name: c.name, updatedAt: c.updatedAt })),
         personaChars: ctx?.personaChars ?? 0,
         memoryChars: ctx?.memoryChars ?? 0,
+        // 下面几个是给「适配新版 SurfCore」用的：读的是对方的配置与版本，不是我们猜的
+        surfcoreVersion: ctx?.surfcoreVersion ?? null,
+        maxChars: ctx?.maxChars ?? null,
+        memorySkipped: Boolean(ctx?.memorySkipped),
+        legacyLayout: Boolean(ctx?.legacyLayout),
         truncated: Boolean(ctx?.truncated),
         maxInjections,
         lastReason,

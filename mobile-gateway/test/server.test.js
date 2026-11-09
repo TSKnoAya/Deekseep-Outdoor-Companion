@@ -860,3 +860,155 @@ test('会话历史：返回已有对话；接口要鉴权', async () => {
 });
 
 // ── 会话结束 ────────────────────────────────────────────────────────────
+
+// ── 设备管理（/admin/devices） ──────────────────────────────────────────
+
+test('设备列表：能列出已配对设备，且不含 tokenHash', async () => {
+  const { token } = await pairAndAuth('设备管理的机子');
+  const res = await fetch(`${baseUrl}/admin/devices`);
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.ok, true);
+  assert.ok(body.total >= 1);
+  const mine = body.devices.find((d) => d.name === '设备管理的机子');
+  assert.ok(mine, '刚配对的设备应出现在列表里');
+  assert.equal(mine.tokenHash, undefined, '绝不能把 tokenHash 吐给界面');
+  assert.ok(mine.id && mine.createdAt);
+  assert.ok(token);
+});
+
+test('吊销单台：那台设备的令牌立刻失效，其它设备不受影响', async () => {
+  const a = await pairAndAuth('要吊销的');
+  const b = await pairAndAuth('要保留的');
+  const list = await (await fetch(`${baseUrl}/admin/devices`)).json();
+  const target = list.devices.find((d) => d.name === '要吊销的');
+
+  const res = await fetch(`${baseUrl}/admin/devices/revoke`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: target.id }),
+  });
+  const body = await res.json();
+  assert.equal(body.ok, true);
+  assert.equal(body.revoked, target.id);
+
+  const dead = await a.api('/v1/sessions');
+  assert.equal(dead.status, 401, '被吊销的令牌不该还能用');
+  const alive = await b.api('/v1/sessions');
+  assert.equal(alive.status, 200, '其它设备不该被牵连');
+});
+
+test('吊销不存在的设备 → 404；缺 id → 400', async () => {
+  const missing = await fetch(`${baseUrl}/admin/devices/revoke`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: 'dev-nope' }),
+  });
+  assert.equal(missing.status, 404);
+
+  const noId = await fetch(`${baseUrl}/admin/devices/revoke`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+  assert.equal(noId.status, 400);
+});
+
+test('清空全部：之后所有令牌失效、列表为空', async () => {
+  const a = await pairAndAuth('清空前一台');
+  const res = await fetch(`${baseUrl}/admin/devices/revoke`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ all: true }),
+  });
+  const body = await res.json();
+  assert.equal(body.ok, true);
+  assert.equal(body.remaining, 0);
+  assert.equal((await a.api('/v1/sessions')).status, 401);
+  const list = await (await fetch(`${baseUrl}/admin/devices`)).json();
+  assert.equal(list.total, 0);
+});
+
+// ── 配对去重（clientId） ───────────────────────────────────────────────
+
+test('同一 clientId 重复配对：设备数不变、旧令牌失效、新令牌可用', async () => {
+  const before = (await (await fetch(`${baseUrl}/admin/devices`)).json()).total;
+
+  const pairOnce = async (clientId) => {
+    const { code } = store.issuePairCode();
+    const res = await fetch(`${baseUrl}/v1/pair`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code, deviceName: '同一台手机', clientId }),
+    });
+    const body = await res.json();
+    assert.equal(body.ok, true, JSON.stringify(body));
+    return body;
+  };
+
+  const first = await pairOnce('install-abc');
+  const second = await pairOnce('install-abc'); // 重装后重新配对
+
+  assert.equal(second.deviceId, first.deviceId, '同一台手机应复用同一条设备记录');
+  assert.notEqual(second.token, first.token, '每次配对都要换新令牌');
+  const after = (await (await fetch(`${baseUrl}/admin/devices`)).json()).total;
+  assert.equal(after, before + 1, '两次配对只应新增 1 台');
+
+  const oldToken = await fetch(`${baseUrl}/v1/sessions`, { headers: { Authorization: `Bearer ${first.token}` } });
+  assert.equal(oldToken.status, 401, '旧令牌必须立刻失效，不能留备份钥匙');
+  const newToken = await fetch(`${baseUrl}/v1/sessions`, { headers: { Authorization: `Bearer ${second.token}` } });
+  assert.equal(newToken.status, 200);
+});
+
+test('不同 clientId 各占一条；没带 clientId 的旧客户端仍然新增（向后兼容）', async () => {
+  const before = (await (await fetch(`${baseUrl}/admin/devices`)).json()).total;
+  const pairWith = async (clientId) => {
+    const { code } = store.issuePairCode();
+    const body = await (await fetch(`${baseUrl}/v1/pair`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code, deviceName: 'x', ...(clientId ? { clientId } : {}) }),
+    })).json();
+    assert.equal(body.ok, true);
+    return body;
+  };
+  await pairWith('install-1');
+  await pairWith('install-2');
+  const mid = (await (await fetch(`${baseUrl}/admin/devices`)).json()).total;
+  assert.equal(mid, before + 2);
+
+  await pairWith(null); // 老版本 App 不带 clientId
+  const end = (await (await fetch(`${baseUrl}/admin/devices`)).json()).total;
+  assert.equal(end, mid + 1, '没有 clientId 时保持旧行为（新增一条）');
+});
+
+test('老记录补登记：配对时没带 clientId，之后请求带上就补上，重扫不再多一条', async () => {
+  // 1) 模拟"老版本 App 配对"：不带 clientId
+  const { code } = store.issuePairCode();
+  const legacy = await (await fetch(`${baseUrl}/v1/pair`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code, deviceName: '老客户端' }),
+  })).json();
+  assert.equal(legacy.ok, true);
+  const before = (await (await fetch(`${baseUrl}/admin/devices`)).json()).total;
+
+  // 2) 新版本 App 立刻带上了 X-Client-Id → 网关补登记
+  const ok1 = await fetch(`${baseUrl}/v1/sessions`, {
+    headers: { Authorization: `Bearer ${legacy.token}`, 'X-Client-Id': 'install-legacy' },
+  });
+  assert.equal(ok1.status, 200);
+
+  // 3) 再重新配对（同一个安装 ID）→ 复用同一条记录
+  const { code: code2 } = store.issuePairCode();
+  const again = await (await fetch(`${baseUrl}/v1/pair`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code: code2, deviceName: '老客户端', clientId: 'install-legacy' }),
+  })).json();
+  assert.equal(again.replaced, true, '补登记之后应认出是老面孔');
+  assert.equal(again.deviceId, legacy.deviceId);
+
+  const after = (await (await fetch(`${baseUrl}/admin/devices`)).json()).total;
+  assert.equal(after, before, '设备数不应增加');
+});

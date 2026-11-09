@@ -83,8 +83,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 val normalized = normalizeBaseUrl(s.baseUrl)
                 store.baseUrl = normalized
-                val c = GatewayClient(normalized, null)
-                val result = c.pair(s.pairCode, android.os.Build.MODEL ?: "Android")
+                val c = GatewayClient(normalized, null, store.installId)
+                val result = c.pair(s.pairCode, android.os.Build.MODEL ?: "Android", store.installId)
                 store.token = result.token
                 store.deviceId = result.deviceId
                 client = c
@@ -311,7 +311,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun connectAndLoad() {
-        client = GatewayClient(store.baseUrl, store.token)
+        client = GatewayClient(store.baseUrl, store.token, store.installId)
         _state.update { it.copy(paired = true) }
         loadSessionsAndConnect()
     }
@@ -342,6 +342,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 } else {
                     openSession(target)
                 }
+                // 顺手把它在别处主动说过的话补进来（拉不到就安静跳过）
+                pullOutreach()
             } catch (e: GatewayException) {
                 _state.update { it.copy(banner = Banner(e.error, e.hint, e.retryable)) }
             }
@@ -360,6 +362,37 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 openSession(created.sessionId)
             } catch (e: GatewayException) {
                 _state.update { it.copy(banner = Banner(e.error, e.hint, e.retryable)) }
+            }
+        }
+    }
+
+    /**
+     * 拉「主动消息」并插进当前对话。
+     *
+     * 只做"打开 App 时补发"，不做推送：推送要前台服务 + 通知权限（改 APK、耗电、
+     * MIUI 还会杀后台）。先把内容通路做对，推送以后再说。
+     */
+    private fun pullOutreach() {
+        val c = client ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val items = c.listOutreach()
+                if (items.isEmpty()) return@launch
+                _state.update { st ->
+                    st.copy(
+                        messages = st.messages + items.map {
+                            ChatMessage(
+                                role = Role.Assistant,
+                                text = it.text,
+                                // 标出来源：用户要知道这句不是刚刚回的
+                                hint = "它在电脑那边主动说的" + (it.source?.let { s -> "（$s）" } ?: ""),
+                            )
+                        },
+                    )
+                }
+                c.ackOutreach(items.map { it.id })
+            } catch (_: Exception) {
+                // 补发失败不该影响正常聊天
             }
         }
     }

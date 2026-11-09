@@ -36,6 +36,7 @@ const FILES = [
   'plugin-routes.test.js',
   'server.test.js',
   'session-meta.test.js',
+  'outreach.test.js',
 ];
 
 const args = process.argv.slice(2);

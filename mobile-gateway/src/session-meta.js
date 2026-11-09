@@ -45,9 +45,14 @@ export function cleanUserText(raw) {
   if (!head) return '';
   // 只剩前言（被截断成「【你是下面这个角色，请一直」）也不能当标题
   if (head.startsWith('【')) return '';
-  if (head.startsWith('<system-reminder>')) return '';
-  if (head.startsWith('<')) return '';
+  if (/^<\/?(system-reminder|skill_content|available_skills)\b/i.test(head)) return '';
   if (/^Current (working directory|runtime context|DSH file policy)/i.test(head)) return '';
+  // DSH 会把这些**当成 user/message 写进会话日志**，它们不是人说的话（真机踩到：
+  // 重启 App 加载历史时，「Time sampled while preparing turn 1…」被渲染成一条消息）
+  if (/^Time sampled while preparing turn/i.test(head)) return '';
+  if (/^Browser time zone for this request/i.test(head)) return '';
+  if (/^Elapsed since the preceding model-visible message/i.test(head)) return '';
+  if (/This snapshot supersedes earlier runtime-context snapshots/i.test(head)) return '';
   return head.trim();
 }
 
@@ -106,9 +111,35 @@ function userMessageText(raw) {
   const looksInjected =
     t.includes('\n\n---\n\n') ||
     /^\s*【/.test(t) ||
-    /^\s*<system-reminder>/.test(t) ||
-    /^Current (working directory|runtime context|DSH file policy)/i.test(t);
+    /^\s*<\/?(system-reminder|skill_content|available_skills)\b/i.test(t) ||
+    /^Current (working directory|runtime context|DSH file policy)/i.test(t) ||
+    /^Time sampled while preparing turn/i.test(t) ||
+    /^Browser time zone for this request/i.test(t) ||
+    /This snapshot supersedes earlier runtime-context snapshots/i.test(t);
   return looksInjected ? cleanUserText(t) : t.trim();
+}
+
+/**
+ * 助手消息的正文。
+ *
+ * 结构是 `{ data: { message: { role, content: [{type:'reasoning'|'text'|'tool-call'}] } } }`
+ * ——真正的回答只是其中 `type:'text'` 那几块。之前读的是 `data.content`，取不到，
+ * 于是**历史里助手的话全丢了**，只剩用户消息（真机就是这样：重启后回复消失）。
+ *
+ * 只取 text，绝不拼 reasoning：那是模型的思考过程，不该出现在对方的手机里。
+ */
+function assistantText(o) {
+  const msg = o?.data?.message ?? null;
+  const content = msg?.content ?? o?.data?.content ?? null;
+  if (typeof content === 'string') return content.trim();
+  if (Array.isArray(content)) {
+    return content
+      .filter((b) => b && (b.type === 'text' || b.type === 'output_text'))
+      .map((b) => String(b.text ?? ''))
+      .join('\n')
+      .trim();
+  }
+  return String(o?.data?.text ?? '').trim();
 }
 
 /**
@@ -134,7 +165,7 @@ export function extractHistory(raw, options = {}) {
       const text = userMessageText(textOf(o));
       if (text) out.push({ role: 'user', text });
     } else if (o.type === 'assistant/message') {
-      const text = textOf(o).trim();
+      const text = assistantText(o);
       if (text) out.push({ role: 'assistant', text });
     }
   }
