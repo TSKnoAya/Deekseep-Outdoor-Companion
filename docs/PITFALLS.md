@@ -4000,3 +4000,27 @@ npm run test:audit
   读写不对称（GET `/dsh/model` 已代理）导致“能显示、改不动”。
 - **修法**：补 `proxyDshFollowDefault` + 路由；新增静态契约测试，钉住前端路径 ⊆ 宿主路由。
 - **教训**：**中间代理层也是接口**；桥接新增一条路由，宿主必须同步开代理，否则前端只能 404。
+
+## 这台机器的 GitHub 通道：PAC 在 12223，真代理是 9910，别用 env 里的 9426
+
+排查过一次很绕的"git push 推不上去"，记下来：
+
+- **现象**：`git push` / `git ls-remote` 报 `CONNECT tunnel failed, response 502`，
+  但浏览器能正常打开 github.com。
+- **误判**：shell 里 `http_proxy=https_proxy=http://127.0.0.1:9426`，一直以为那是用户的代理。
+  实际 9426 只放行几个域名（api.github.com、codeload 通，github.com 不通）。
+- **真因**：Windows 的代理是 **PAC 自动配置**：
+  `HKCU\...\Internet Settings\AutoConfigURL = http://127.0.0.1:12223/proxy.pac`，
+  PAC 内容只有一行 —— 返回 `PROXY 127.0.0.1:9910`。浏览器按 PAC 走 9910，所以能上。
+- **还有个坑**：git 的 `-c http.proxy=...` **会被环境变量 http_proxy 覆盖**，
+  所以必须同时 `env -u http_proxy -u https_proxy ...`，否则参数白写。
+- **可用的写法**：
+
+  ```bash
+  env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY \
+    git -c http.proxy=http://127.0.0.1:9910 -c http.version=HTTP/1.1 ls-remote origin
+  ```
+
+  已写进本仓库 `.git/config`（`http.proxy` + `http.version=HTTP/1.1`），但环境变量仍需清掉。
+- **判断顺序**（省时间）：先看 PAC（`AutoConfigURL`）→ 再 `curl -x <port> https://github.com/`
+  → 最后才试 git。**别拿 env 里的 proxy 当结论**。
