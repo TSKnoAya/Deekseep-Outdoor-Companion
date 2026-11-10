@@ -264,12 +264,6 @@
   - DSH 会话日志护栏（字节补丁 + 退出后自动换入）——**代码完成，等下次重启验证**。
   - 插件清理逻辑「硬删除 → 隔离」——代码完成，待重启生效。
   - 工程纪律文档（AGENTS/ROADMAP/PITFALLS/HANDOFF/RISK_REGISTER）——本次新增。
-  - **手机端 App（2026-10-30，候选 F 落地为 `mobile-gateway/`）**——用户要求「安卓手机上发消息到 DSH，处理完回传手机」，
-    明确**不走 DSH Web**、只用本地 `D:\deepseek\DeepSeek Harness.exe`（理由见 DESIGN：Web 只监听回环、Cookie 绑 authority、协议是 WebSocket RPC）。
-    网关 `--profile acp` 常驻 stdio：设备配对（6 位码 + 令牌只哈希落盘）、HTTP/SSE 收发、审批回传、语音后端插件化
-    （ASR 双模：网关 sherpa / 手机本地；TTS 四档播报 + 火山接口占位，按用户要求「先跳过」）。
-    网关单测 **85/85**；Android（Kotlin + Compose）编译通过并产出 debug APK。
-    **未做**：真机（红米 K80）跑通、手机录音上传（`gateway-sherpa` 这条路只到接口）、火山 TTS 真实调用。详见 `mobile-gateway/docs/cases/2026-10-30-dsh-mobile-app.md`。
 
 ## 3. 路线候选（收益 / 成本 / 风险 / 回滚）
 
@@ -282,7 +276,6 @@
 | C. 群聊图片/表情的可访问性兜底（CDN 失败重试与降级） | 掉图率下降 | 中 | 低 | 开关回退 |
 | D. 文档自动化校验（README 版本/端口/命令与代码一致） | 防「文档比代码旧」 | 低 | 极低 | 删除校验脚本 |
 | E. 多平台适配（贴吧 extension 落地；微博已明确不做，2026-10-23 移除占位） | 新场景 | 高 | 中（权限面扩大） | 保持 manifest 关闭 |
-| F. 手机端 App（`mobile-gateway/`：ACP 网关 + Android + 语音双模） | 在手机上直接跟 DSH 对话：发消息、审批、语音输入/播报，不依赖 DSH Web 与端口漂移 | 高（网关 + Android + 语音三块） | 中（本机监听端口、设备令牌、录音与通知权限） | 删 `mobile-gateway/` 即回退；网关不装启动项、不写注册表 |
 
 ## 4. 人工决策点（我往往想不到最优路线，这些必须由用户拍板）
 

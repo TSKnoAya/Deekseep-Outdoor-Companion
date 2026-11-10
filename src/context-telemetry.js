@@ -119,12 +119,13 @@ export function createContextTelemetry({
 
   /** 唤醒：由 bridge 在真正投递 prompt 时调用。 */
   function wake({
-    wakeId = '', key = '', sessionId = '', reason = '', promptChars = 0, layers = {},
+    wakeId = '', key = '', sessionId = '', characterId = '', reason = '', promptChars = 0, layers = {},
   } = {}) {
     write('wake', {
       wakeId: safeString(wakeId, 80),
       key: safeString(key, 120),
       sessionId: safeString(sessionId, 120),
+      characterId: safeString(characterId, 80),
       reason: safeString(reason, 80),
       promptChars: safeNumber(promptChars),
       layers: safeObject(layers),
@@ -133,9 +134,12 @@ export function createContextTelemetry({
   }
 
   /** 观察一条 DSH session/event；任何异常都吞掉，不能影响主链路。 */
-  function ingestEvent(session, event) {
+  function ingestEvent(session, event, opts = {}) {
     try {
       const meta = sessionMeta(session);
+      const wakeId = safeString(opts.wakeId ?? '', 80);
+      const key = safeString(opts.key ?? '', 120);
+      const characterId = safeString(opts.characterId ?? '', 80);
       if (!meta.sessionId) return;
       const type = event?.type;
       if (type === 'llm/retry-started') {
@@ -151,7 +155,7 @@ export function createContextTelemetry({
       if (type === 'turn/start') {
         const turn = safeNumber(event.data?.turn);
         turns.set(`${meta.sessionId}|${turn}`, { startedAt: now(), modelCalls: 0, toolCalls: 0, toolResults: 0 });
-        write('turn_start', { ...meta, turn, observed: 'observed' });
+        write('turn_start', { ...meta, wakeId, key, characterId, turn, observed: 'observed' });
         return;
       }
       if (type === 'assistant/message' || type === 'assistant/attempt') {
@@ -167,6 +171,8 @@ export function createContextTelemetry({
         if (turnState && phase === 'message') turnState.modelCalls += 1;
         write('model_call', {
           ...meta,
+          wakeId,
+          key,
           turn,
           step,
           retry,
@@ -186,7 +192,7 @@ export function createContextTelemetry({
         const turnState = turns.get(`${meta.sessionId}|${turn}`);
         if (turnState) turnState.toolCalls += 1;
         if (callId) calls.set(`${meta.sessionId}|${callId}`, { tool, startedAt: now(), turn });
-        write('tool_call', { ...meta, turn, callId, tool, observed: 'observed' });
+        write('tool_call', { ...meta, wakeId, key, characterId, turn, callId, tool, observed: 'observed' });
         return;
       }
       if (type === 'tool/result') {
@@ -201,6 +207,8 @@ export function createContextTelemetry({
         const isError = event.data?.message?.isError === true || block?.isError === true;
         write('tool_result', {
           ...meta,
+          wakeId,
+          key,
           turn,
           callId,
           tool: safeString(call?.tool ?? block?.name ?? '', 120),
@@ -218,6 +226,8 @@ export function createContextTelemetry({
         turns.delete(`${meta.sessionId}|${turn}`);
         write('turn_end', {
           ...meta,
+          wakeId,
+          key,
           turn,
           durationMs: state ? Math.max(0, now() - state.startedAt) : null,
           modelCalls: state?.modelCalls ?? 0,

@@ -58,8 +58,8 @@ try {
   turn.end('s1');
 
   turn.begin('s2', 'group:1');
-  assert.equal(turn.noteToolError('s2', 'compress', 'not allowed 1'), null);
-  const repeated = turn.noteToolError('s2', 'compress', 'not allowed 2');
+  assert.equal(turn.noteToolError('s2', 'compress', 'fetch failed: ECONNREFUSED'), null);
+  const repeated = turn.noteToolError('s2', 'compress', 'fetch failed: ECONNREFUSED');
   assert.equal(repeated?.code, 'TURN_REPEATED_TOOL_ERROR');
   assert.equal(repeated?.evidence?.count, 2);
   turn.end('s2');
@@ -77,6 +77,20 @@ try {
     assert.equal(ids.length, 2, 'ackByDedupe 返回被确认的 id');
     const after = store.list({ limit: 50, includeAcked: false }).events.filter((e) => e.dedupeKey === 'test:down');
     assert.equal(after.length, 0, '恢复后同 dedupeKey 事件不再出现');
+  }
+
+  // 业务拒绝 vs 环境错误：前者不该停轮（2026-10-31 实测 qq_close_conversation 被拒 3 次触发 L3）
+  {
+    const guard = createTurnGuard({ maxSteps: 99, maxRepeatedErrors: 2 });
+    guard.begin('biz');
+    const reject = '收尾失败：对方最近一条不是你的消息…建议先 qq_send_message';
+    assert.equal(guard.noteToolError('biz', 'qq_close_conversation', reject), null, '业务拒绝不计数');
+    assert.equal(guard.noteToolError('biz', 'qq_close_conversation', reject), null, '业务拒绝重复也不停轮');
+    const infra = 'fetch failed: ECONNREFUSED';
+    assert.equal(guard.noteToolError('biz', 'qq_send_message', infra), null);
+    const hit = guard.noteToolError('biz', 'qq_send_message', infra);
+    assert.equal(hit?.code, 'TURN_REPEATED_TOOL_ERROR', '环境错误仍按阈值停轮');
+    guard.end('biz');
   }
 
   // 接线契约：桥接必须真的在回合事件里接上 guard，且用 cancel-only 接口。

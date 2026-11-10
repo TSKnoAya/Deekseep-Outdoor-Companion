@@ -313,6 +313,7 @@ const server = new McpServer({ name: 'snowluma-safe', version: '0.2.0-r4' });
 // 所以这三个仍然只在调用时由桥接校验。
 const TOOL_CONFIG_FLAGS = {
   qq_get_prompt: 'getPrompt',
+  qq_get_context_snapshot: 'getSnapshot',
   qq_get_unread_messages: 'getUnread',
   qq_get_recent_messages: 'getRecent',
   qq_social_state: 'socialState',
@@ -350,10 +351,27 @@ const TOOL_CONFIG_FLAGS = {
   qq_sticker_note: 'stickerNote',
   qq_set_sticker_remark: 'setStickerRemark',
 };
+const TOOL_PROFILE = String(cfg.socialV2?.toolProfile || (cfg.socialV2?.tools?.getSnapshot === false ? 'full' : 'balanced'));
+const PROFILE_HIDDEN = {
+  balanced: new Set([
+    'qq_get_unread_messages', 'qq_get_recent_messages', 'qq_social_state',
+    'qq_get_active_members', 'qq_get_my_recent_messages',
+  ]),
+  compact: new Set([
+    'qq_get_unread_messages', 'qq_get_recent_messages', 'qq_social_state',
+    'qq_get_active_members', 'qq_get_my_recent_messages',
+    'qq_get_group_members', 'qq_get_group_history',
+    'qq_list_stickers', 'qq_list_voices',
+  ]),
+};
 const disabledTools = [];
 {
   const registerTool = server.tool.bind(server);
   server.tool = (name, ...rest) => {
+    if (TOOL_PROFILE !== 'full' && PROFILE_HIDDEN[TOOL_PROFILE]?.has(name)) {
+      disabledTools.push(`${name}(profile:${TOOL_PROFILE})`);
+      return undefined;
+    }
     const flag = TOOL_CONFIG_FLAGS[name];
     if (flag && cfg.socialV2?.tools?.[flag] === false) {
       disabledTools.push(`${name}(${flag})`);
@@ -539,10 +557,18 @@ server.tool(
 server.tool(
   'qq_get_prompt',
   '查看当前二代仿真模式的提示词/角色/推荐值/可用工具/当前唤醒配置（只读）。',
-  { key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'), token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）') },
-  async ({ key, token }) => {
+  {
+    key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+    token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+    mode: z.enum(['tone', 'full']).optional().describe('默认群聊 tone（只语气/场景/日常），私聊 full；需要完整核心时显式传 full'),
+    sections: z.array(z.enum(['role', 'wake', 'memory', 'stickers', 'slang', 'closure', 'voices'])).optional().describe('默认 role/wake/memory；需要表情/黑话/收尾/语音库时显式加'),
+  },
+  async ({ key, token, mode, sections }) => {
     try {
-      const data = await agentApi(`/api/socialV2/prompt?key=${encodeURIComponent(key)}`, { headers: { 'x-agent-token': token } });
+      const q = new URLSearchParams({ key });
+      if (mode) q.set('mode', mode);
+      if (Array.isArray(sections) && sections.length) q.set('sections', sections.join(','));
+      const data = await agentApi(`/api/socialV2/prompt?${q}`, { headers: { 'x-agent-token': token } });
       return { content: [{ type: 'text', text: serializeModelData(data) }] };
     } catch (error) {
       return { content: [{ type: 'text', text: `获取提示词失败：${error?.message ?? error}` }], isError: true };
@@ -550,6 +576,33 @@ server.tool(
   }
 );
 
+server.tool(
+  'qq_get_context_snapshot',
+  '一次读取会话上下文：未读 + 最近 + 会话状态 + 活跃成员。默认只返回最近少量摘要，带 truncated/refs；需要精确正文再用 qq_get_message_detail。避免连续调用 unread/recent/social/activeMembers。',
+  {
+    key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
+    token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
+    include: z.array(z.enum(['unread', 'recent', 'social', 'activeMembers'])).optional().describe('默认四类都取；只取需要的可减少结果'),
+    unreadLimit: z.number().int().min(1).max(100).optional().describe('未读最多返回条数，默认 12'),
+    recentLimit: z.number().int().min(1).max(100).optional().describe('最近消息最多返回条数，默认 10'),
+    afterSeq: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional().describe('只取本地 seq 大于该水位的未读；用于补读'),
+    textChars: z.number().int().min(40).max(2000).optional().describe('每条正文最多字符，默认 200'),
+  },
+  async ({ key, token, include, unreadLimit, recentLimit, afterSeq, textChars }) => {
+    try {
+      const q = new URLSearchParams({ key });
+      if (Array.isArray(include) && include.length) q.set('include', include.join(','));
+      if (unreadLimit) q.set('unreadLimit', String(unreadLimit));
+      if (recentLimit) q.set('recentLimit', String(recentLimit));
+      if (afterSeq) q.set('afterSeq', String(afterSeq));
+      if (textChars) q.set('textChars', String(textChars));
+      const data = await agentApi('/api/socialV2/snapshot?' + q.toString(), { headers: { 'x-agent-token': token } });
+      return { content: [{ type: 'text', text: serializeModelData(data) }] };
+    } catch (error) {
+      return { content: [{ type: 'text', text: '获取上下文快照失败：' + String(error?.message ?? error) }], isError: true };
+    }
+  }
+);
 server.tool(
   'qq_get_unread_messages',
   '查看未读消息，不自动标记已读。大量积压或快照 partial=true 时，用 afterSeq=readThroughSeq 从水位后按时间顺序补读；从最早未读开始传 0。',
@@ -795,7 +848,7 @@ if (cfg.socialV2?.tools?.sendPoke !== false) {
 
 server.tool(
   'qq_wait_for_messages',
-  '等待分两种用途。首答前已读消息、只想确认有没有补充：用 purpose="reply"，按最后来信时间补足 quietMs 静默，已安静足够就立即返回；读取/思考时新到的消息也会返回，新消息重算静默。timeoutMs 是最长预算，不要求等满；预算到但 quiet=false 不代表对方已说完。此用途绝不代替沉睡前观察。等对方继续说、等回复或睡前观察：用默认 purpose="messages"；先等新消息，收到后才按 quietMs 等静默，没有新消息会等到 timeoutMs，单传 quietMs 不会缩短总等待。静默下限由后台配置，默认 10000ms。直接看 newMessages、unreadCount 和 readThroughSeq，返回消息无需重复查询；仍有未展示未读才补读。决定潜水/收尾时才用默认用途加 timeoutMs=300000 完成沉睡前观察，不能把 5 分钟观察放在首答之前；短等待不能代替。全程无人说话返回 preSleepWaitSatisfied=true；观察期间来了新消息返回 preSleepWaitObserved=true，读后不需参与可收尾，参与回复则下次收尾重新观察。preSleepWaitRemainingMs 仅供准备收尾时参考。',
+  '等待分两种用途。首答前已读消息、只想确认有没有补充：用 purpose="reply"，按最后来信时间补足 quietMs 静默，已安静足够就立即返回；读取/思考时新到的消息（含本轮开始后、调用前到的）也会返回，新消息重算静默。timeoutMs 是最长预算，不要求等满；预算到但 quiet=false 不代表对方已说完。此用途绝不代替沉睡前观察。等对方继续说、等回复或睡前观察：用默认 purpose="messages"；已有本轮没看过的消息会立即返回，没有才等新消息，收到后才按 quietMs 等静默，没有新消息会等到 timeoutMs，单传 quietMs 不会缩短总等待。静默下限由后台配置，默认 10000ms。直接看 newMessages、unreadCount 和 readThroughSeq，返回消息无需重复查询；仍有未展示未读才补读。决定潜水/收尾时才用默认用途加 timeoutMs=300000 完成沉睡前观察，不能把 5 分钟观察放在首答之前；短等待不能代替。全程无人说话返回 preSleepWaitSatisfied=true；观察期间来了新消息返回 preSleepWaitObserved=true，读后不需参与可收尾，参与回复则下次收尾重新观察。preSleepWaitRemainingMs 仅供准备收尾时参考。积压消息按配置有界交付（默认最多 20 条/4000 字）；超出部分用 foldedCount/foldedPreview 标记，不要要求一次性倒出全部历史。',
   {
     key: z.string().describe('会话 key，格式 group:群号 或 private:QQ号'),
     token: z.string().describe('会话令牌（见唤醒提示中的【会话令牌】）'),
@@ -1122,6 +1175,7 @@ if (cfg.socialV2?.sticker?.enabled !== false && cfg.socialV2?.tools?.getStickerI
         const q = new URLSearchParams({ key, stickerId: String(stickerId) });
         const data = await agentApi(`/api/socialV2/sticker-image?${q.toString()}`, { headers: { 'x-agent-token': token }, timeoutMs: 180000 });
         if (!data?.image?.data || !data?.image?.mimeType) {
+          if (data?.text) return { content: [{ type: 'text', text: String(data.text) }] };
           return { content: [{ type: 'text', text: `表情没有可返回的图片：${errorText(data?.error, '未知')}` }], isError: true };
         }
         const content = [
@@ -1264,6 +1318,7 @@ if (cfg.socialV2?.tools?.getSelfImage !== false) {
         const q = new URLSearchParams({ key });
         const data = await agentApi(`/api/socialV2/self-image?${q.toString()}`, { headers: { 'x-agent-token': token } });
         if (!data?.image?.data || !data?.image?.mimeType) {
+          if (data?.text) return { content: [{ type: 'text', text: String(data.text) }] };
           return { content: [{ type: 'text', text: `没有可返回的形象图片：${errorText(data?.error, '未知')}` }], isError: true };
         }
         return {

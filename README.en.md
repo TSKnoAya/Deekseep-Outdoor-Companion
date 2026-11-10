@@ -21,31 +21,6 @@ configuration & state files, capability boundaries).
 The documentation index (one line per doc, with "still current?" notes) is **[docs/README.md](docs/README.md)**;
 the repository/folder and script-naming conventions are in **[docs/FOLDER_MAP.md](docs/FOLDER_MAP.md)**.
 
-## About this repository: a mobile gateway extension built on SurfCore
-
-This repository is based on [SurfCore](https://github.com/Mieksido/surfcore) and mainly adds [`mobile-gateway/`](mobile-gateway/):
-it brings the **character persona and memory** of a fish-raising plugin to your phone (local gateway + Android app),
-while all of SurfCore's existing QQ / Bilibili / desktop-pet features stay unchanged.
-
-To be explicit: **`mobile-gateway` does not provide any fish-raising functionality of its own.** It ships no characters
-and no memories — every "fish" comes from a running fish-raising plugin, so **at least one such plugin is required**;
-otherwise the phone app is just a plain assistant. It is currently adapted to SurfCore, reading its character directory
-(`current.json`, `persona.md`, `memory-card-prompt-*.md` under `~/.dsh/surfcore/characters/`), following the desktop's
-current character by default and optionally pinning one on the phone.
-
-We would like this layer to become plugin-agnostic:
-
-- Authors of other fish-raising plugins are welcome to add compatibility. The main task is to turn the
-  "which character / which memory" lookup in [`mobile-gateway/src/fish-context.js`](mobile-gateway/src/fish-context.js)
-  into an adapter layer; the injection policy (first-turn injection, re-injection after memory changes, per-session cap,
-  pinning a character from the phone) is plugin-neutral and can be reused as-is.
-- If your plugin uses a different layout, open an issue describing it, or send a PR with an adapter.
-- Goal: the phone side should depend on "a fish-raising plugin", not on a specific brand.
-
-Upstream & license: SurfCore ([Mieksido/surfcore](https://github.com/Mieksido/surfcore)) · further upstream
-qq-bridge / QSH (Derpyu520 et al.); see [LICENSE](LICENSE) (MIT). Third-party assets and code dependencies used by
-the mobile gateway are listed in [mobile-gateway/THIRD_PARTY_NOTICES.md](mobile-gateway/THIRD_PARTY_NOTICES.md).
-
 ## Architecture
 
 ```

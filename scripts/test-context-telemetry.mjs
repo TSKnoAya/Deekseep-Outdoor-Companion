@@ -14,8 +14,8 @@ const telemetry = createContextTelemetry({ file, source: 'plugin', now: () => 17
 
 const session = { id: 's1', header: { agentPreset: 'qq-chat-v2' } };
 const BODY = 'M'.repeat(320);
-telemetry.wake({ wakeId: 'w1', key: 'group:1', sessionId: 's1', reason: 'groupMessage', promptChars: 12000 });
-telemetry.ingestEvent(session, { type: 'turn/start', data: { turn: 1 } });
+telemetry.wake({ wakeId: 'w1', key: 'group:1', sessionId: 's1', characterId: 'char-1', reason: 'groupMessage', promptChars: 12000 });
+telemetry.ingestEvent(session, { type: 'turn/start', data: { turn: 1 } }, { wakeId: 'w1', key: 'group:1', characterId: 'char-1' });
 // 流式 attempt 先到，最终 message 后到；报告必须只算一次。
 telemetry.ingestEvent(session, {
   type: 'assistant/attempt',
@@ -52,7 +52,9 @@ telemetry.ingestEvent(session, { type: 'turn/end', data: { turn: 1 } });
 
 const lines = fs.readFileSync(file, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
 assert.ok(lines.some((x) => x.kind === 'wake' && x.promptChars === 12000));
+assert.ok(lines.some((x) => x.kind === 'wake' && x.characterId === 'char-1'));
 assert.ok(lines.some((x) => x.kind === 'model_call' && x.phase === 'message'));
+assert.ok(lines.some((x) => x.kind === 'turn_start' && x.characterId === 'char-1'));
 assert.ok(lines.some((x) => x.kind === 'tool_result' && x.resultChars === 320));
 assert.ok(lines.some((x) => x.kind === 'tool_result' && x.ok === false));
 assert.ok(!fs.readFileSync(file, 'utf8').includes('M'.repeat(320)), '遥测不得记录消息正文');

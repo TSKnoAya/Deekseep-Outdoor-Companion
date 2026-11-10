@@ -96,7 +96,7 @@ export function summarize(records) {
   }
   for (const { call, wake } of assigned) {
     const reason = wake?.reason || '(no wake record)';
-    if (!byReason.has(reason)) byReason.set(reason, { wakes: 0, modelCalls: 0, toolCalls: 0, input: 0, cacheHit: 0, cacheMiss: 0, output: 0, promptChars: [] });
+    if (!byReason.has(reason)) byReason.set(reason, { wakes: 0, modelCalls: 0, toolCalls: 0, input: 0, cacheHit: 0, cacheMiss: 0, output: 0, promptChars: [], layers: {} });
     const row = byReason.get(reason);
     row.modelCalls += 1;
     row.input += (call.usage?.cacheMiss ?? 0) + (call.usage?.cacheHit ?? 0) + (call.usage?.cacheWrite ?? 0);
@@ -213,10 +213,13 @@ export function formatReport(report) {
 }
 
 function parseArgs(argv) {
-  const out = { json: false, bridge: '', plugin: '' };
+  const out = { json: false, bridge: '', plugin: '', all: false, since: 0, until: 0 };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     if (a === '--json') out.json = true;
+    else if (a === '--all') out.all = true;
+    else if (a === '--since') out.since = Date.parse(argv[++i] ?? '') || 0;
+    else if (a === '--until') out.until = Date.parse(argv[++i] ?? '') || 0;
     else if (a === '--bridge') out.bridge = argv[++i] ?? '';
     else if (a === '--plugin') out.plugin = argv[++i] ?? '';
   }
@@ -228,6 +231,19 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const bridgeFile = args.bridge || path.join(root, 'state', 'context-telemetry-bridge.jsonl');
   const dshHome = process.env.DSH_HOME || path.join(os.homedir(), '.dsh');
   const pluginFile = args.plugin || path.join(dshHome, 'surfcore', 'context-telemetry-plugin.jsonl');
-  const report = summarize([...readLines(bridgeFile), ...readLines(pluginFile)]);
+  let records = [...readLines(bridgeFile), ...readLines(pluginFile)];
+  // 默认只保留 token-budget 已跟踪的 SurfCore 会话，避免把普通 DSH 编码会话混进基线。
+  // bridge 的 wake 记录没有 session 的也保留，用于看唤醒频率。
+  let allow = null;
+  try {
+    const daily = JSON.parse(fs.readFileSync(path.join(dshHome, 'surfcore', 'token-usage-daily.json'), 'utf8'));
+    const ids = Object.keys(daily.sessions ?? {});
+    if (ids.length) allow = new Set(ids);
+  } catch {}
+  if (!args.all && allow) {
+    records = records.filter((r) => r.kind === 'wake' || !r.sessionId || allow.has(r.sessionId));
+  }
+  if (args.since || args.until) records = records.filter((r) => (!args.since || Number(r.ts) >= args.since) && (!args.until || Number(r.ts) <= args.until));
+  const report = summarize(records);
   console.log(args.json ? JSON.stringify(report, null, 2) : formatReport(report));
 }

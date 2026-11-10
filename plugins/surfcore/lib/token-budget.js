@@ -204,6 +204,16 @@ export function createTokenBudgetService({
     return null;
   }
 
+  /** 供旁路遥测过滤：只观测 SurfCore 自己跟踪的会话，避免把用户普通 DSH 会话混进基线。 */
+  function isTrackedSession(session) {
+    const id = String(session?.id ?? '');
+    if (!id) return false;
+    if (sessionCategory.has(id)) return true;
+    if (state.sessions?.[id]?.category) return true;
+    const header = session?.header ?? {};
+    return Boolean(classify(header, { sessionId: id, title: session?.title, agentPreset: header.agentPreset }));
+  }
+
   function rememberSession(id, category, meta = {}) {
     if (category) sessionCategory.set(id, category);
     const prev = sessionMeta.get(id) ?? {};
@@ -747,6 +757,7 @@ export function createTokenBudgetService({
   }
 
   return {
+    isTrackedSession,
     dir,
     stateFile,
     dailyFile,

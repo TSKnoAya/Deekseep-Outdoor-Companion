@@ -5,214 +5,104 @@
 
 ---
 
-## 快照：2026-11-02 02:20（清理到 3 条 + App 启动不再建会话）
+## 快照：2026-11-03 04:05（v0.8.7 正式发布）
 
-- 清理：按用户要求只留 3 条（群聊黑话提取 / 【当前时间】 / 帮我安装插件），其余 13 条
-  （含「你是金花吗？」「你记得…」、测试与空会话）全部移入
-  `~/.dsh/_quarantine/keep3-…`；`workspace.json` 引用同步清理（dirs=3、refs=3、archived=0）。
-- App：`loadSessionsAndConnect` 不再自动建会话；`send()` 在无会话时先建后发；
-  「＋」仍显式新建。APK 已重装。
-- 目的：避免“App 一启动，DSH 就多一条未命名”，让两边稳定在同样的对话集合。
+### 当前事实
 
----
+- **稳定版**：`0.8.7`（Release `SurfCore v0.8.7`；tag `v0.8.7` → 远端 `90872a7`）。
+- **远端 main**：`90872a7`（tree `2f4bae0`）；**本地 main**：`3a3100e`（release commit）；
+  **公开镜像**：`D:\deepseekwork\opensource\surfcore` @ `f849cc4`（tree 与远端一致）。
+- **本地 dev**：`7ed599c`（已把 main 合回 dev），版本 `0.8.7`。
+- **归档核对**：下载 tag zip → `release-manifest --verify` **678 / 不符 0 / 缺失 0**。
+- **测试**：`npm run test:audit` **142/142**；插件测试 0 失败；本地清单 `678 / 0`。
 
-## 快照：2026-11-02 02:00（阶段 1：桌面 DSH 传输，手机会话与桌面同源）
+### 本版范围
 
-- 新增 `mobile-gateway/src/desktop-client.js`：与 AcpClient 同形，走桌面 DSH Web RPC
-  （`session/create` / `session/prompt` / `session/follow` + `$events` 审批回执）。
-- 选择：`DSH_MOBILE_TRANSPORT=auto`（默认，桌面在则 RPC、否则 ACP）/ `desktop` / `acp`。
-- 实测：网关 `desktop-dsh` 已连接；建会话立刻进 DSH 默认工作区；
-  SSE `hello → turn_start → text "OK" → turn_end ok`（1.8s）；模型为 `deepseek-v4.1-flash-sg`。
-- 已知边界：无逐字流式（完成后整段）；桌面换端口/启动晚于网关时不会自动重发现；
-  审批路径已实现未真机验证；问答自动回空答案。
-- 文档：case §32、PITFALLS「ACP 会话 DSH 不认领」。
+`0.8.6` 以来**全部 dev**：74 个提交、约 105 个文件，包含 11-03 的 5 个批次
+（模型跟随 / QQ 晚注册工具 / B站 @ 楼层 / #sl 过滤 / 人格语气）和 05:50 及更早的队列批次
+（多群记忆、模型证据链、监听错误、schemastery、zip 更新迁移、node 路径、outbox、语音总闸等）。
 
----
+### 发布路径（重要）
 
-## 快照：2026-11-02 01:40（手机新建会话同步到 DSH：捷径失败，A 方案待做）
+- 本地源码仓库含 `video/`，公开镜像不含；**不要直接把本地 main 树推到 GitHub**；
+- 正确流程：本地 `main` 出 release commit → 按 `git diff 42ec20d..HEAD` 同步变更到
+  `D:\deepseekwork\opensource\surfcore` → 镜像生成自己的 manifest → tag → 用 API 发布镜像；
+- 镜像 commit 与远端 API commit 的 hash 不同，但 **tree 必须一致**（本次 `2f4bae0`）。
 
-- 实测：DSH `session/create` 能建会话（立刻可见），但 ACP **无法 resume 桌面建的会话**（Internal error）；
-  用 ACP id 去“登记”会另建一条或产生 `<uuid>` 与 `session-<uuid>` 两份副本。
-- 已回退实验代码（会给 DSH 造重复会话）；保留 `handlePrompt` 的 resume 兜底（失败只记日志）。
-- 清理：7 条测试会话用 DSH 官方 `workspace/archiveSession` 归档（文件保留，可恢复），
-  用户要求保留的 3 条未动。
-- **未做**：A 方案（手机会话全链路走桌面 RPC + 审批回执），需要单独一轮改造。
-- 文档：case §31。
+### 下一版
+
+- dev 构建从 `0.8.7-dev.1` 开始；
+- MC / 贴吧 / 抖音 / 微信 / 向量记忆仍是未完成分支，不在这版；
+- 更新器「本地改动备份并覆盖」修复已包含在 0.8.7。
 
 ---
 
-## 快照：2026-11-02 01:05（手机 5 条 / DSH 侧栏 4 条 → 已对齐）
+## 快照：2026-11-02 14:50（dev.9 + 本地语音下载/语音启动诊断/模型/思考强度/设置保存 UX/QQ 群 @/B站监听/时间窗/缓存/更新/人格/媒体/备份/记忆/语音）
 
-- 真相：DSH 侧栏每个工作区只**预览 1 条**会话，不是总数；手机是平铺全部。
-- 旧手机会话（cwd 在 `...\surfcore\mobile-gateway`）原先不在任何工作区 → 只能进「未分组」。
-- 处置：用户同意、**完全退出 DSH** 后，给 `~/.dsh/storages/workspace.json` 加了
-  「手机网关」工作区（30 个纯 uuid 会话 id），备份在 `~/.dsh/_backups/`；
-  用户打开 DSH 后已确认能点开看到「你是金花吗？」「你记得今天群里说过什么吗？」。
-- 刻意保留的差异：手机过滤空会话（DSH 的「未命名」那条空会话手机上不显示）。
-- 文档：case §30、PITFALLS「侧栏不是总数」。
-- ⚠️ 当时为改配置停掉了网关，需重新启动。
+### 当前事实
 
----
+- **分支**：`dev` 是集货区；`main` 固定为已发布的 `0.8.6`（`42ec20d`）。
+- **稳定版**：`0.8.6`（Release 标题 `SurfCore v0.8.6`）；`/releases/latest` 仍是它。
+- **dev 构建**：`0.8.6-dev.9`（本地构建提交 `d9cdccd`）。
+- **本地 dev HEAD**：`4d2d7c3 fix(voice): make local pack install resumable and honest`；版本 `0.8.6-dev.9`；工作区有另一会话未提交的 docs/README、docs/handoffs、MC 平台/工具测试，与本批无关。
+- **测试**：`npm run test:audit` **130/130**（含另一会话未提交的 MC 测试；本批新增本地语音下载/进度断言）；插件测试全绿；清单见 manifest（本次提交后重新生成）。
 
-## 快照：2026-11-02 00:15（旧会话打开是空的 → 历史接口）
+### 本批内容（都在 dev，未进稳定版）
 
-- 根因：App `openSession()` 只清空消息 + 订阅 SSE，从来没拉历史；ACP 也没有“取历史”方法。
-- 实现：`session-meta.js` 新增 `extractHistory()` 与 `history(sessionId)`（只读多帧 zstd 会话文件，
-  剥掉注入前言，跳过系统事件）；`GET /v1/sessions/:id/history?limit=200`；
-  App 打开会话时先回填历史（界面仍空时才回填），失败给红条。
-- 验证：node **204/204**；真实会话 `586221c0` 返回「你是金花吗？」。
-- APK 已构建；**手机未连接（adb 无设备）**，待插 USB 后安装。
+- **本地语音包下载**：codeload 回退；代码 zip 30s 超时/镜像/重试/cause；postInstall 45min→3h；下载% 与总进度分开；失败可继续下载；
+- **语音包启动诊断**：云端直接拉 Python；stdout/stderr 双收；GBK 回退解码；早退 `VOICE_START_EXITED`；`logs/startup.log`；体积 60MB→280MB；
+- **模型与思考强度**：新设置页目录驱动模型下拉 + low/high/max 下拉；POST /api/dsh/model 校验；目录不可用只调强度；
+- **设置保存 UX**：主按钮「保存并生效」；固定 toast；设置页/弹窗固定底栏；群管理保存上移；管理员局部保存；按钮对比度；
+- **QQ 群 @**：原始 at 段判断；@我+@别人仍唤醒；self_id 缺失回退 selfUserId；CQ at 兼容；
+- **B站 监听/时间窗**：listenTick 的 `L` 改名；共享 time-window 支持跨午夜/全角冒号；非法窗口保存提示；群错误只私聊；
+- **B站 视频缓存**：watch 默认删原片；debrief 保留到字幕条后删；shots 按天/总量清理；目录可配；
+- **更新**：staged 用下载前目标键 dismiss；排队中不再 pending；弹窗内提示重启；进度阶段化，保留下载统计；
+- **QQ 设置保存**：保存成功返回并同步 stamps，连续保存不再 CONFIG_STALE；409 的 stamps 可用；warning 不再当 error；
+- **DSH 安装事务**：setup 备份 profile、原子写、安装后核对；DSH reconcile 裁剪 bundles 时自动回滚；
+- **人格语气层**：`readPersonaLayerText('tone')` 真正读 `persona.tone.md`；未知层 warning，不再静默回落核心；
+- **人格卡拆分**：删除 `handlePersonaClassify` 未定义 `layer`；空输入/内部错误/模型不可用分开提示；前端送完整草稿；
+- **图片/表情**：p.qpic + gxh 候选；取图失败用 summary/本地标签兜底；`vision.imageInput` 文字模式；
+- **备份轮转**：真实时间戳/扩展名文件名正确分组，`keep=40` 生效；失败可见，无关文件不误删；
+- **记忆卡最近优先**：`recent` 先收最近 N 天的 owner 记录，不再被 initial 挤空；recent 8→12，initial/owner priority 下调；
+- **记忆卡初次相遇**：拆开 firstMet/pinned；初次相遇可取消置顶、可忘记；删除后自动接管；reload 失败不再假装成功；
+- **QQ wait**：有积压先返回，不再从 wait 时刻重新等静默；默认 20 条/4000 字有界批量，群聊超出折叠，私聊不静默删除；
+- **B站 动态前缀**：统一 `DSH_HOME` / `SURFCORE_BILI_CONFIG` 配置路径；空前缀清历史默认前缀；提示词空前缀不再要求；
+- **黑话学习等待**：waiter 先于 prompt 注册、可取消；collector 兼容缺 turn/start；超时用 `LEARNER_TURN_TIMEOUT`，不再泛化误删会话；
+- **语音提示词**：不再写死“默认关闭”；唤醒动态注入总闸/工具/语音库状态；`qq_list_voices` 补 VOICE_* code/hint；
+- **通知/QQ/沉默逛**：桌面通知修复；新增 `notify.type=qq`（只私聊 owner）；B站「互动与静默」+ 评论年龄上限；闸门错误带 code/hint；超时提醒可写入 `notify.timeoutMutes` 永久静音；
+- **管理员温柔模式**：默认关闭；开启弹全部风险；关闭后不再注入管理员提示/标记；关闭时可选保留或丢弃上下文（重置 QQ + B站 新会话）；管理员权限不变；
+- 更新器 `updates.channel`：`stable`（默认，只跟正式 Release）/ `dev`（只跟 `-dev.N` Pre-release）；
+- 设置页「检查更新」下面单选 **main / dev**；切回 main 会清空旧检查结果，不被 dev 弹窗打扰；
+- 版本规则 `X.Y.Z-dev.N`（同号下低于正式版；正式版切 dev 允许一次 `channel-switch`）；
+- `scripts/publish-dev.mjs`：dev 分支 tag + Pre-release，过清单门禁，不碰 main；
+- **更新生命周期收口（A–H）**：dev 走 zip；未知 channel/kind 结构化报错；失败删 pending、成功清 `.failed`、
+  新排队清旧 `.failed`；staging 清理跳过待重启引用；插件缺陷失败进退避；更新中禁止切通道；UI 正确显示 dev；
+- 控制台「DSH 注册（MCP / bundle）」修复按钮 + L2 弹窗按钮（`POST /dsh/repair`）；
+- 主题对比度：`--qbw-*` 语义层 + 弹窗跟随主题 + hover/focus/disabled + `test-theme-tokens`；
+- 缺 MCP 的建议改为“宿主机终端执行（模型没有本地工具）”。
 
----
+### 发版规则（2026-11-01 用户确认制）
 
-## 快照：2026-11-01 23:40（手机新会话归入 DSH 工作区）
+- **任何发布（稳定版或 dev Pre-release）前必须先问用户**：列版本号 / 改动 / 影响 / 验证结果，等“发”；
+  禁止自行 `--yes` 发 dev。
+- 编辑会话只提交 `dev`，不改版本号、不打 tag、不发 Release；发布由发布会话合并 `dev → main`。
+- dev 构建流程：`git checkout dev` → 干净 → `GH_TOKEN=... node scripts/publish-dev.mjs --yes`（用户确认后）。
+- 发完把 main 合回 dev，避免漂移。
 
-- 问题：手机会话 cwd 是 `...\surfcore\mobile-gateway`，不在 DSH 的 3 个工作区里 → 桌面端看不到。
-- 做法：`~/.dsh/mobile-gateway/config.json` 增加
-  `defaultCwd = C:\Users\dfer5\Documents\deepseek-harness\default-workspace`（必须反斜杠），
-  手机**新建**会话即归入 DSH 的 default-workspace。
-- 验证：临时网关 8791 实测，新会话落盘在 `--C-Users-…-default-workspace--/<uuid>`。
-- 旧会话（11 条未归档）仍在 mobile-gateway 目录，桌面看不到；要显示需在 DSH 里把该目录加为工作区。
-- 文档：case §28。
+### 下一批发布（稳定版）
 
----
+- 建议 **0.8.7（patch）**：`git checkout main && git merge --no-ff dev` → 三条门禁 → bump/tag/Release → main 合回 dev；
+- 发布前先让测试机用 dev 通道跑一轮（清单见 `docs/guides/DEV-TESTING.md`）。
+- 测试机当前在 dev.4 或 dev.5；**dev.4 起可自动升级 dev.5**；若还在 dev.3，需手动覆盖一次。
 
-## 快照：2026-11-01 22:50（手机比 DSH 多两个空会话）
+### 未验证 / 风险
 
-- 定位：手机多出的两条是 `session-214caa84`（default-workspace）与 `session-46d8cd00`（state-agents），
-  都只有 359–431B、没有任何用户消息；原因是网关返回全部非归档会话，而 DSH 桌面端不展示空会话。
-- 修法：`/v1/sessions` 默认过滤「没有标题（无用户消息）」的会话；`?includeEmpty=1` 调试用。
-- 验证：node **200/200**；APP 无需重装；**重启网关**生效。
-
----
-
-## 快照：2026-11-01 22:35（会话归档改为「以 DSH 为准」）
-
-- 用户指出：DSH 里只有「归档」没有「删除」，且要求以 DSH 为准、保持同步。
-- 发现：DSH 归档状态在 `~/.dsh/storages/workspace.json` → `global.archivedSessionIds`；
-  归档能力属于 workspace 控制器（桌面层），ACP profile 不挂，网关拿不到。
-- 最终：网关**只读**该文件（`src/dsh-archive.js`，mtime+size 缓存），
-  `/v1/sessions` 默认过滤已归档（`?includeArchived=1` 调试用）；
-  移除 §25 的手机侧归档接口与 App 按钮，归档/取消统一在 DSH。
-- 验证：node **200/200**；APK 重建并装真机（旧「显示已归档」文案已消失）。
-- 文档：case §26（§25 已被取代）。
-
----
-
-## 快照：2026-11-01 22:25（手机端会话归档：只隐藏，不删文件）
-
-- 用户反馈：App 右上角下拉会话太多，没有删除/归档入口。
-- 关键发现：`/v1/sessions` 返回的是本机 DSH 能看到的**全部**会话（桌面端也在里面），
-  删文件会波及电脑 → 用户拍板只做「手机侧隐藏」。
-- 实现：`src/session-archive.js`（`archived-sessions.json`，写盘失败回滚内存）；
-  `GET /v1/sessions` 每条带 `archived`；`POST /v1/sessions/:id/archive|unarchive`。
-  App 下拉每行加了归档/恢复按钮，底部「显示已归档（N）」可展开恢复。
-- 验证：node **202/202**；APK 构建成功并已装真机（dex 含新文案）。
-- 生效：**重启网关** + 重装 App 已做；未验证真机点击手感。
-- 文档：case §25。
-
----
-
-## 快照：2026-10-31 20:20（修：插件同路径双方法 → 「方法不对」405）
-
-- 现象：④ 点「开启」红字「方法不对」；GET 正常。
-- 根因：DSH webServer 按路径注册，`/api/persona` 的 GET、PUT 各注册一次 → 后者被覆盖，
-  PUT 落到只剩 GET 的路由 → 包装器 405。③「保存并生效」同样中招。
-- 修法：`dsh-plugin/lib/index.js` 改为每路径只注册一次、内部按 method 分发；
-  新增 `test/plugin-routes.test.js`（假 ctx 复现「后注册覆盖前注册」语义）。
-- 验证：`node test/run-all.js` **193/193**；待重启 DSH 后手点开启/保存。
-- 文档：case §24、PITFALLS「同路径注册两次」。
-
----
-
-## 快照：2026-10-31 20:10（手机独立选鱼）
-
-- 之前「④ 手机上是哪条鱼」只是**桌面当前角色**的镜像（读 `characters/current.json`），不能选。
-- 现在：④ 卡片在 `characters/index.json` 里有多条鱼时给出下拉：
-  「跟随桌面当前（X）」或固定某条；选择落 `config.json.personaCharacterId`。
-- 切角色会在下一轮**强制重新注入**（不受 4 次上限限制，前缀写明「角色已经换成 X」）；
-  固定的角色被删 → 回退桌面当前 + `selectionMissing` 黄字提示。
-- 环境变量 `DSH_MOBILE_PERSONA_CHARACTER` 可覆盖（空串 = 跟随桌面）。
-- 验证：`node test/run-all.js` **187/187**；真实数据只读 GET 正常（characters=[大肥鱼]）。
-- 未验证：两条鱼之间的真实切换（本机只有 1 条，下拉按设计不显示）。
-- 生效：**重启网关 + 重启 DSH**；旧会话建议新开。
-
----
-
-## 快照：2026-10-31 20:05（修：扫码页误报「相机打不开」）
-
-- 现象：点「扫码配对」红字 `相机打不开：The coroutine scope left the composition`。
-- 根因：Compose 取消异常（`LeftCompositionCancellationException`）被 `catch (Exception)` 当业务错误显示；
-  起因是 `LaunchedEffect(previewView, key)` 把组合期写入的 `mutableStateOf` 当 key，effect 半路被重组取消。
-- 修法：PreviewView 改用 `AtomicReference`（非状态）、key 只用重试计数、通用 catch 前先放行
-  `CancellationException`、真异常 `Log.e("QrScanScreen", ...)`。
-- 验证：`assembleDebug` 成功、dex 确认含新代码、已装真机；**待用户实测取景**。
-- 文档：case §22、PITFALLS「取消不是失败」。
-
----
-
-## 快照：2026-10-31 19:45–20:05（设置页一键启动网关）
-
-### 用户要求
-
-> 「需要一个不依赖改代码就能拉起网关的按钮」
-
-（背景：DSH 设置里显示网关「关闭」——网关是独立进程，用户得自己去双击 bat。）
-
-### 做了什么
-
-| 事 | 落点 |
-| --- | --- |
-| 插件宿主启动器 | 新增 `dsh-plugin/lib/gateway-process.js`：node 探测 → spawn `main.js --listen 0.0.0.0:8788 --pair` → 12 秒内探 `/v1/health`；日志写 `<DSH_HOME>/mobile-gateway/gateway.log` |
-| 接口 | 插件 `/status` 不再把「网关没跑」当错误，返回 `running/managed/log/lastError`；新增 `POST /start`、`POST /stop` |
-| 页面 | ① 卡片右上角「启动网关」/「停止网关」；失败时红块显示原因 + 日志尾部 + 日志路径 |
-| 生命周期 | 按钮启动的网关随 DSH 退出停止（`ctx.effect` + `taskkill /T /F`，连 ACP 一起收）；bat 起的不受影响 |
-
-### 验证
-
-- `node test/run-all.js` → **174/174**（新增 3 条：node 探测顺序、真起假网关→重复启动→停止、秒退失败带 code/hint/日志）
-- 真实 `main.js` 在 8791 端口：**325ms** HTTP up → health ok → stop 后端口释放
-- 未验证：DSH 设置页里手点按钮（需重启 DSH）；`ELECTRON_RUN_AS_NODE` 兜底路径（本机有 DSH 自带 node）
-
-### 生效
-
-**重启 DSH** 才会加载新的插件宿主与设置页代码。
-
----
-
-## 快照：2026-10-31 19:10–19:40（扫码配对：保留手动输入，额外加二维码）
-
-### 用户要求
-
-> 「保留现在的手动输入配对，额外增加扫码配对」
-
-### 做了什么
-
-| 事 | 落点 |
-| --- | --- |
-| 二维码生成（网关） | `mobile-gateway/src/pair-qr.js`：载荷 `dshmobile://pair?v=1&u=<地址>&c=<码>`；`qrMatrix()` 出 `{size, rows}`。编码用 vendored `src/vendor/qrcode-generator.cjs`（MIT，**必须 .cjs**） |
-| 设置页 ② 卡片 | 生成后画内联 SVG 二维码（绕开 CSP）、多地址切换、5 分钟倒计时；无地址/回环/生成失败都有黄色可行动提示 |
-| 手机扫码 | `ui/QrScanScreen.kt`：CameraX + ZXing core（不用 GMS/ML Kit，国行机可用）；权限拒绝 / 相机被占用都有重试与「去系统设置」 |
-| 深链 | Manifest 注册 `dshmobile://pair`；系统相机/微信扫到点链接可直接唤起 App，**只填地址与码、不自动配对**（外部链接不可信，要用户看清地址再点） |
-| 解析 | `pair/PairPayload.kt`（与网关同一格式的两处实现，改格式要同步） |
-
-### 验证
-
-- `node test/run-all.js` → **171/171**（新增 pair-qr 8 条、server 2 条）
-- `gradle testDebugUnitTest` → PairPayloadTest **5/5**
-- `gradle assembleDebug` → BUILD SUCCESSFUL，APK **20,696,951 字节**（+2.8MB，CameraX/ZXing）
-- 用 jsQR 1.4.0 独立解码：矩阵 4 个纠错等级全部还原；复刻插件 `qrSvg()` 的路径算法也能解码（370 段）
-
-### 没验证（下一个我别当成已验）
-
-- 真机摄像头对着电脑屏幕的实际扫码（需要人拿着扫）
-- HyperOS 系统相机/微信对 `dshmobile://` 深链的「打开 App」弹窗
-- 设置页多地址切换的观感
-
-### 生效
-
-网关重启（`src/*`）→ 设置页能生成二维码；DSH 重启（插件 client.js）→ 卡片出现二维码；
-手机需重装 APK。
+- **首次从 0.8.6 稳定版切 dev 必须手动 bootstrap**：0.8.6 里没有通道代码，它的「检查更新」只看
+  `/releases/latest`（忽略 Pre-release）。手动覆盖一个 dev 包之后，通道才生效；见 `docs/guides/DEV-TESTING.md` 第 2 节；
+- `publish-dev.mjs` 目前是**全量上传**（约 631 个 blob，2~5 分钟），后续可做增量；
+- 公开 `dev` 分支会随每次 dev 构建出现，但没有 Release，稳定用户看不到；
+- `video/` 44 个文件（约 5.7MB）被 git 跟踪，会进每个 zip（稳定版也一样）；后续可考虑移出仓库或改 Release 附件；
+- 深/浅主题只做了静态 token/对比度测试，尚未逐屏人工截图复核。
 
 ---
 
@@ -220,10 +110,50 @@
 
 ### 当前事实
 
-- **HEAD**：`c7df162 feat(telemetry): Phase 0A 遥测`（0.7.22 后）
+- **HEAD**：`68dc2b7 chore(release): 同步限制去重清单`
 - **package.json version**：`0.7.22`（编辑会话未改版本）
 - **工作区**：干净
 - 本会话上一段（10-29）的离线导入、中文路径、管理员称呼修复均已进 v0.7.0–v0.7.4。
+
+### 本轮全部优化（2026-10-31 21:10）
+
+- 交接块见 `docs/RELEASE-QUEUE.md` 顶部「本轮全部优化交接」；
+- 范围：账单/群分层/人格语气/工具快照+profile/UI 分类搜索/会话审计/记忆卡/限制失败可见性；
+- audit 107/107；plugins/surfcore npm test 通过；manifest verify 0；
+- 重启 DSH + QQ 桥接；默认 balanced；
+
+### 本次新增（2026-10-31 15:55，第二轮收紧）
+
+- 第二轮样本 117 唤醒 / 13 发送 / 104 close-only，暴露 strict direct 仍有漏口；
+- 只认真正的 @昵称/引用自己；裸昵称、owner、fish bypass 不再绕过每日配额；
+- 需要再次重启桥接验证；audit 99/99。
+
+### 本次新增（2026-10-31 13:55，hotfix）
+
+- **question 不再绕过每日配额**：新增 `src/wake-policy.js`；
+- 只有 @/名字/拍一拍/私聊/管理员算 hard direct；
+- question 仍可唤醒，但受 20 次/日 + 2 分钟间隔；
+- 一小时样本：138 唤醒、15 发送、116 close-only；两个群占 129 唤醒。
+- 需要重启桥接生效；audit 99/99。
+
+### 本次新增（2026-10-31 12:40，Phase 4 后）
+
+- **A+B 账单**：每个角色包 + 每个 QQ 群/私聊一份 Markdown；
+- 位置：`~/.dsh/surfcore/billing/{index.md,characters/*,conversations/*}`；
+- 数据：token 账本 + 遥测；启动 30 秒后生成、每 10 分钟刷新；手动 `node scripts/billing-report.mjs`；
+- 归因：群/私聊精确；单角色历史全归当前角色；多角色无遥测标未归因；
+- 群内个人不精确分摊；不记录正文；不调用模型。
+
+### 本次新增（2026-10-31 11:30，0.7.23 后，Phase 1A）
+
+- **调用链重建（只读）**：
+  - bridge 投递 wake 时生成 `wakeId`，QQ 会话事件带 `wakeId` 写入遥测；
+  - `context-call-chain-report.mjs` 去重 bridge/plugin，重建 `wake → turn/step → tool`；
+  - 48 wake 样本：close-only 26 次、send→close 10 次、backlog 7 次 ¥0.933、
+    delivered 17/48；model calls/wake p50=2/p90=4/p99=11。
+- 未改 close/wait/send、调用上限、唤醒合并、调度；下一步先语义复核
+  close-only / keyword / backlog / question 错误。
+- 测试：`test-context-call-chain`；audit **95/95**。
 
 ### 本次新增（2026-10-31 10:15，0.7.22 后，Phase 0A）
 
@@ -327,395 +257,6 @@
 1. 先等用户给具体新需求；编辑会话不改 version/tag/推公开仓库。
 2. 若继续语音包：先补 `PERMISSIONS.md` 的权限断言，再决定 piper/huayan/微调权重许可。
 3. 若继续更新/发布链路：按 AGENTS §1.8 三道门禁（git 对象清单 → git 对象发布 → 下载真实归档核对）。
-
----
-
-## 快照：2026-10-31 01:00–01:25（P1「把鱼带到手机」+ 深海皮肤）
-
-### 做了什么
-
-| 事 | 结果 |
-| --- | --- |
-| 角色上下文注入（只读） | `src/fish-context.js` + `src/fish-inject.js`：网关在**每会话第一轮**把 `persona.md` + `memory-card-prompt-qq.md` 拼在用户消息前；记忆变了再注入；最多 4 次 |
-| 设置页开关 | 插件新增 ④ 卡片（状态/角色/字数/已生效会话 + 开关），走 `/admin/persona`（仅本机回环） |
-| 手机皮肤 | 取本机皮肤包 `maid-atelier` 的暗色宫殿/立绘/徽章 → `skin_bg` / `skin_mascot` / `skin_chibi` / `skin_emblem`；`ui/Skin.kt` 集中调色板，`Skin.ENABLED=false` 一键回退 |
-
-### 验证
-
-- `已注入角色上下文（first）：傲娇助手`；手机问「昨天群里聊了什么」→ 答出记忆卡里的具体事件，语气对得上人格。
-- 第二轮 `already` 不重复注入；记忆被 SurfCore 更新后 `memory-changed` 再注入。
-- 单测 **142/142**（新增 fish-context 8 条 + fish-inject 9 条）；注入前言**未**污染记忆卡。
-
-### 重要结论
-
-**P2「回写」不用网关做**：手机这一轮已被 SurfCore 自己的管线写进 `memory-card-*.md`。
-网关只读不写，单一写入者原则天然成立。
-
-### 待确认
-
-皮肤观感（手机锁屏截不到图）、设置页 ④（需重启 DSH）。
-素材 **CC BY-NC-SA 4.0：禁商用、需署名** —— 上善 / ZipZipPipe / Small-tailqwq。
-
----
-
-
-## 快照：2026-10-30 23:09–23:20（配对成功后的 unknown session + 沉浸式全屏）
-
-### 用户要求
-
-> 「能进入对话界面，但『出错了』，而且对话框被三大金刚键挡住，允许在打开 app 时隐藏它们，屏幕底部上滑才显示」
-
-### 结论
-
-**配对是成功的**（网关日志 `15:08:03 新设备配对成功：dev-0e21b2e4d633`）。
-报错 `Invalid params: unknown session: 7a0b657f…` 的原因：网关每次启动都 spawn 新的
-DSH 子进程，`session/list` 能看到别的进程留下的历史会话，但 `prompt` 只认当前进程的。
-App 启动时挑了 `sessions.first()` → 正好踩中死会话。
-
-### 改了什么
-
-| 修复 | 落点 |
-| --- | --- |
-| 启动时只认自己的 `lastSessionId`，没有就新建（不再取 first） | `ChatViewModel.loadSessionsAndConnect` |
-| 发送遇 `unknown session` → 自动建会话并重发一次（用户无感） | `ChatViewModel.send` + `isUnknownSession()` |
-| 沉浸式全屏：隐藏状态栏/导航栏，上滑临时浮出 | `MainActivity`（WindowInsetsControllerCompat + BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE） |
-| 交付 | `adb install -r -d` 直接装到真机（Success），保留登录态 |
-
-### 已验证
-
-- BUILD SUCCESSFUL；`adb install` 返回 Success；`am start` 已拉起。
-- 网关侧仍活着（8788 LISTENING），DSH 已连接。
-
-### 没验证 / 下一步
-
-- **App 内实际发消息还没复测**（截屏时手机锁屏了，`mCurrentFocus=NotificationShade`，
-  `screencap` 全黑）。需要用户解锁后发一句。
-- 若仍报 unknown session，说明 `isUnknownSession` 的匹配词没覆盖到，看网关日志里的 error 原文补。
-
----
-
-## 快照：2026-10-30 23:02–23:10（真机通了：防火墙只放行「专用网络」）
-
-### 用户要求
-
-> 「点了测试连接后，这样的提示。我手机现在插上了 USB 连接电脑，你可以调用吗？」
-
-### 结论
-
-新 APK 的报错终于说人话了：`failed to connect to /192.168.1.247 (port 8788) …
-**after 10000ms**`。**超时 = 包被静默丢弃**（防火墙 DROP），不是「网关没开」
-（那会是 connection refused，秒回）。
-
-查到两个事实：
-- `Get-NetConnectionProfile` → 以太网 `NetworkCategory = **Public**`
-- `Get-NetFirewallRule DSH-Mobile-Gateway-8788` → `Profile = **Private**`
-
-→ Public 配置下入站照样被丢。改成 `profile=any`（UAC 提权，exitcode=0）后**通了**。
-
-### 真机验证（adb + 手机自带 curl，绕开 App 界面）
-
-```
-adb shell curl .../v1/pair            → {"ok":true,"deviceId":"dev-a1bfe561491c","token":"…"}
-adb shell curl .../v1/sessions        → sessionId=28dd210f-…
-adb shell curl .../messages           → {"ok":true,"turnId":"turn-…"}
-adb shell curl -N .../stream          → hello → text:"收到" → turn_end ok:true, 2624ms
-```
-
-**第一次在真机上把「配对 → 建会话 → 发消息 → 流式回包」全走通。**
-网关/防火墙/DSH/模型四段都证明没问题，只剩 App 界面这层。
-
-### 改了什么
-
-| 改动 | 落点 |
-| --- | --- |
-| 防火墙规则改为 `profile=any`（活的规则已用 netsh set 改过） | 系统防火墙 |
-| 启动脚本建规则用 `profile=any`；规则已存在时也尝试放宽 | `start-gateway.bat` |
-| 文档 | case §14（含「超时 vs 拒绝」判据、adb 验证命令） |
-
-### 交接 / 注意
-
-- 测试设备 `adb-verify`（`dev-a1bfe561491c`）留在 `devices.json`；无吊销接口，
-  要清就停网关后删该文件。
-- 配对码一次性 + 5 分钟；过期只能重启网关（`--pair`）重新打。
-- 当前网关是我在会话里起的后台进程，**可能随时停**——用户自己双击 bat 才是长久方案。
-
----
-
-## 快照：2026-10-30 22:48–23:00（`配对失败：null` = App 网络全在主线程，**必须重装 APK**）
-
-### 用户要求
-
-> 「我刚刚试了网关地址和 6 位配对码，提示配对失败，手机 wifi 和电脑在同一个路由器，是不是超过了 5 分钟？」
-
-### 结论
-
-不是时间问题（虽然那个码确实也失效了）。真凶是 App 的**致命 bug**：
-
-`ChatViewModel` 里 **9 处** `viewModelScope.launch { … }` 直接在默认的 `Dispatchers.Main`
-上跑 OkHttp 的阻塞 `execute()` → Android 抛 `NetworkOnMainThreadException` →
-**该异常 message 为 null** → 落到 `catch (e: Exception)` → 界面显示「配对失败：null」。
-
-**旧 APK 在任何网络请求上都会失败**，与配对码/防火墙/5 分钟窗口无关。之前只用
-`e2e-smoke.mjs`（Node 侧）验过，App 侧从没跑过真实请求，所以藏到真机才暴露。
-
-### 改了什么
-
-| 修复 | 落点 |
-| --- | --- |
-| 9 处网络协程改 `launch(Dispatchers.IO)` | `ChatViewModel.kt`（配对/测试连接/会话/发消息/取消/审批/设置） |
-| 语音输入、TTS 保持 Main（需要 Looper） | 同上，未动 |
-| 异常不再显示 null | 新增 `describeException()` |
-| 新增「测试连接（不需要配对码）」按钮 | 打 `/v1/health`，绿色=通了，红色=连不上；当场区分两种失败 |
-| 地址框误标红 | 判据改为「含空格/无冒号」 |
-| APK 重打包 | `mobile-gateway/app-debug-0.1.0.apk`（17.5 MB） |
-
-### 已验证
-
-- `BUILD SUCCESSFUL`（26s）。
-- 网关侧：`curl http://192.168.1.247:8788/v1/health` → `ok:true, dsh.connected:true`；
-  同一进程窗口打印 `http://192.168.1.247:8788` 与配对码，DSH 4 秒内连上。
-- **App 侧修复未经真机验证**（手机没连 adb，`adb devices` 为空）——需要用户装新 APK 再试。
-
-### 没验证 / 下一步
-
-- 用户装新 APK 后：先点「测试连接」→ 绿色 → 再填新码配对。
-- 若「测试连接」仍红：按 banner 提示在手机浏览器打开 `http://192.168.1.247:8788/v1/health`，
-  能出 JSON = 网络 OK（App 还有别的 bug）；打不开 = 网络/防火墙。
-- 网关当前**没在跑**（`netstat` 无 8788），用户必须双击 `start-gateway.bat` 并保持窗口开着。
-
----
-
-## 快照：2026-10-30 22:37–22:50（真机装上但卡在配对：做了双击启动器）
-
-### 用户要求
-
-> 「之前的 .apk 我装在红米 K80 上，它可以启动，但我不知道网关地址和 6 位配对码」
-
-结论：App 没问题，是**电脑端网关没启动**——地址和码只在网关窗口里打印。
-
-### 排查出的三个拦路石（都已处理）
-
-| 拦路石 | 处理 |
-| --- | --- |
-| 这台电脑**没有系统 node**（PATH 里只有 WorkBuddy 自带的） | `start-gateway.bat` 自动找：PATH → `%ProgramFiles%\nodejs` → **DSH 自带运行时**（v24.21.0，实测能跑网关） |
-| Windows 防火墙三个 profile 全开、**无 8788 放行规则** | 脚本首次启动用 UAC 提权添加 `DSH-Mobile-Gateway-8788`（实测已添加并 Enabled）；失败提示「右键 → 以管理员身份运行」 |
-| App 地址框把 `192.168.1.247:8788` **误标红** | `ChatScreen.kt` 改判据（含空格 / 无冒号才算错），提示改成「会自动补 http://」 |
-
-### 改了什么
-
-| 改动 | 落点 |
-| --- | --- |
-| 双击启动器 | 新增 `mobile-gateway/start-gateway.bat`（纯 ASCII + `chcp 65001`，中文全交给 node 打印） |
-| App 文案与校验 | `ChatScreen.kt` 帮助弹窗改为「双击 start-gateway.bat」；地址框判据修正 |
-| APK 重打包 | `mobile-gateway/app-debug-0.1.0.apk`（17.5 MB，BUILD SUCCESSFUL 30s） |
-| 文档 | case 文档新增 §12（含 .bat 编码/代码页两个坑） |
-
-### 已验证
-
-- `start-gateway.bat` 实测：找到 node → 添加防火墙规则 → 打印
-  `http://192.168.1.247:8788` 与 `配对码 650750` → `DSH 已连接`。
-- `Get-NetFirewallRule DSH-Mobile-Gateway-8788` → Enabled / Inbound / Allow。
-- DSH 自带 node v24.21.0 跑网关正常（`--listen 127.0.0.1:8795 --pair` 打印码并连上 DSH）。
-- 已清空 `devices.json`（删掉 6 台 e2e-smoke 测试设备），用户手机是「首台」。
-
-### 没验证 / 下一步
-
-- 用户还没真正配对成功过（要他自己双击 bat 抄码）。
-- 手机与电脑同 Wi-Fi、密码正确未确认。
-- 配对成功后第一件事：发一句话看有没有回复（模型已在 §11 打通，理论上应该通）。
-
----
-
-## 快照：2026-10-30 21:38–22:00（打通模型：端到端**第一次真正跑通**）
-
-### 用户要求
-
-> 「动手」（继续按上一轮建议：先解决密钥，再谈签名和向导）
-
-### 结论先行
-
-`node test/e2e-smoke.mjs` → **`text` 事件收到，模型回了「收到」，`turn_end ok:true`，2838ms**；
-连跑两次都通过（2838 / 2956ms）。**手机那条链的每一环都真跑过一遍了。**
-
-### 根因（推翻了两个假设）
-
-| 试法 | 结果 |
-| --- | --- |
-| 设 `DEEPSEEK_API_KEY` | 用户没有平台密钥 |
-| 改 `agent-default-model`（ACP profile patch） | **完全无效**，报错一字不变——ACP 不读这个插件 |
-| 想让 ACP 读桌面端模型设置 | 不会。ACP profile 只加载 `dsh-base` + `dsh-acp-app` |
-
-真凶在 `--dump-config` 里现形：`@deepseek-ai/dsh-acp` 自己的 config 写死了
-`provider: deepseek-official` / `model: deepseek-v4-flash`（API-key 型，需 `DEEPSEEK_API_KEY`）。
-
-### 改了什么
-
-| 改动 | 落点 |
-| --- | --- |
-| ACP 默认模型改为本机可用的免费路由 | `~/.dsh/profiles/acp/cordis.patch.yml`：`- id: acp` → `provider: our-free-model` / `model: kilo-auto/free` |
-| 免费模型插件装进 ACP profile | `~/.dsh/profiles/acp/package.json` + `node_modules`（pnpm 从桌面端本地 tgz 离线装） |
-| 固化脚本 | 新增 `mobile-gateway/scripts/setup-acp-model.mjs`（默认写账号型；`--provider/--model` 可改；已有配置时拒覆盖，只打印片段） |
-| 文档 | case 文档新增 §11（含三条死路、`--dump-config` 用法、实测输出、回滚清单）；§6 验证表把「ACP 运行期样本」改为 ✅ |
-
-### 已验证
-
-- `node test/run-all.js` → **114/114**。
-- `node test/e2e-smoke.mjs` → **通过 ×2**：`hello → turn_start → text → turn_end`，
-  `result.text="收到"`，`stopReason=end_turn`。
-- 报错演进路线（可作为排查参照）：`no API key for provider route "deepseek-official"`
-  → `Insufficient Balance`（路由通了、账号没余额）→ **成功**（换免费路由）。
-
-### 对用户 DSH 安装的改动（可回滚，只碰 acp profile）
-
-| 文件 | 备份 |
-| --- | --- |
-| `~/.dsh/profiles/acp/cordis.patch.yml` | `cordis.patch.yml.bak-20261030-213947` |
-| `~/.dsh/profiles/acp/package.json` | `package.json.bak-*` |
-| `~/.dsh/profiles/acp/node_modules/` | 删掉即回滚 |
-
-**`profiles/desktop` 未动**，桌面端不受影响。
-
-### 没验证 / 下一步
-
-- 真机（红米 K80）仍未装过：`adb install app-debug-0.1.0.apk` → 起网关 → `--pair` → 发消息。
-- 4G 下走 Tailscale 未实测（要手机+账号）。
-- 距「发布给别人用」还差：release 签名、首次启动向导、后台常驻。
-  **注意**：每个用户都要做一次 §11 的模型配置，否则他的手机会看到 `no API key` 或 `Insufficient Balance`——
-  这件事必须在向导里做掉，`scripts/setup-acp-model.mjs` 就是它的雏形。
-
----
-
-## 快照：2026-10-30 21:25–21:45（路径配置化：别人用自己的电脑也能跑）
-
-### 用户要求
-
-> 「情景一：我外出后手机连家里 DSH…情景二：把 app 发布，别人也能按这个步骤配置使用」
-> 「别人在使用这个 app 时，不经过我的电脑，只经过他自己的电脑」
-
-第 2 条把「DSH 路径写死在我这台机器」变成硬阻塞：别人装在 C 盘、
-`%LOCALAPPDATA%\Programs\...`，网关直接起不来。
-
-### 改了什么
-
-| 改动 | 落点 |
-| --- | --- |
-| 新增安装位置探测 | 新增 `src/paths.js`（`candidateDirs` / `detectInstall` / `resolveDshPaths` / `isInsideAsar` / `notFoundHint`） |
-| 删掉三处硬编码 `D:\deepseek\...` | `src/config.js` 改为 `null`，交给探测 |
-| 新增启动配置 `config.json` | `~/.dsh/mobile-gateway/config.json`；首次运行写模板，已存在不覆盖，坏文件隔离 |
-| 新增 `--dsh-dir` | 优先级：命令行 > 环境变量 > config.json > 探测 |
-| 启动横幅 | 打印 `DSH 安装目录（来源：detect/arg/config/env-*）`；Tailscale 地址标 `← Tailscale，外出也能用` |
-| 出门方案 | 新增 `mobile-gateway/docs/TAILSCALE.md`（含"为什么不建议直接把 8788 开公网"） |
-| 测试 | 新增 `test/paths.test.js`（16 条，注入假 fs）→ **114/114** |
-
-### 已验证
-
-- `node test/run-all.js` → **114/114**。
-- 本机：`DSH 安装目录：D:\deepseek（来源：detect）`，自动生成
-  `config.json = {"dshInstall":"D:\\deepseek","listen":"0.0.0.0:8788"}`。
-- 优先级：`--listen 127.0.0.1:8793` 覆盖 config.json 的 `0.0.0.0:8788` ✅
-- `/v1/health` → `dsh.connected=true`；无令牌 `/v1/sessions` → 401 ✅
-- e2e 回归：链路仍通，**仍卡在 provider key**（阻塞未变，见下）。
-
-### 顺带修的真 bug
-
-第一版探测在本机就报「找不到 cli」：`cli.js` 打在 `app.asar` 里，**普通 Node fs 看不进 asar**，
-`existsSync` 恒为 false，但它其实可用。现 `isInsideAsar()` 把它排除在存在性判断外。
-**记一条**：asar 内路径不能拿 fs 判存在。
-
-### 没验证 / 阻塞
-
-- **模型密钥仍是第一阻塞**：`llm-deepseek: no API key for provider route "deepseek-official"`。
-  每个用户都要自己解决（否则他的手机发消息必失败）。三条出路见 case 文档 §9.4，待用户拍板。
-- 出门方案只写了文档（Tailscale），**没实测过 4G 下连**（需要手机+账号，得用户自己走一遍）。
-- 距「发布」还差：release 签名、首次启动向导、后台常驻（case 文档 §10.5）。
-
----
-
-## 快照：2026-10-30 21:00–21:20（网关地址/配对码入口 + `--listen`/`--pair` + 端到端冒烟）
-
-### 用户要求
-
-> 「我需要在哪里查看网关地址和 6 位配对码？」
-
-一句话的问题，查下去发现**照文档做必然卡死**：网关默认只监听回环，而唯一的换址开关
-`--listen` 在报错文案里出现过、代码里根本没实现。
-
-### 改了什么
-
-| 改动 | 落点 |
-| --- | --- |
-| 新增启动参数解析（`--listen` / `--listen=` / `--pair` / `-h`） | 新增 `src/cli.js`；`src/main.js` 改为先解析 argv 再 `resolveConfig` |
-| 启动横幅改成能照抄的形式 | 回环时打「手机连不上 + 怎么改」；非回环时**探测本机 IPv4 并打印可填地址**（滤掉 `127.*`、`169.254.*`） |
-| 补 `--pair`（配对码重发入口） | 已配对设备后启动不再自动打码；换手机/重装 App 用 `--pair` |
-| 新增端到端冒烟脚本 | `test/e2e-smoke.mjs`（起网关子进程 → 配对 → 建会话 → SSE → 发消息 → 等 `turn_end`） |
-| 新增 14 条 CLI 测试 | `test/cli.test.js`，已进 `test/run-all.js` → **99/99** |
-| 文档 | `docs/FOLDER_MAP.md` 更新启动命令；case 文档 §7 重写为「上真机完整步骤」、新增 §9 冒烟记录 |
-
-### 已验证
-
-- `node test/run-all.js` → **tests 99 / pass 99 / fail 0 / cancelled 0**。
-- `node src/main.js --help` / `--listen abc` → 帮助与报错都正常（非法地址 `exit 1`，不静默用默认值）。
-- `node src/main.js --listen 0.0.0.0:8788` 实测输出：
-  `网关已启动：http://0.0.0.0:8788` / `手机端「网关地址」填：http://192.168.1.247:8788` / `配对码 717842`；
-  2 秒后 `DSH 已连接：deepseek-harness-acp v0.0.1`（会话能力 close,list,resume）。
-- `node test/e2e-smoke.mjs` → HTTP 全通、ACP 回合生命周期 `hello → turn_start → turn_end` 真跑出来；
-  **但文本块 0 个**，`turn_end.ok=false`，原因是 DSH 缺 provider route 密钥（见下）。
-
-### 没验证 / 阻塞（**这条是真阻塞，别当成小问题**）
-
-- **DSH 的 `deepseek-official` 路由没有 API key**：
-  `llm-deepseek: no API key for provider route "deepseek-official"; store DEEPSEEK_API_KEY through the credentials service`。
-  网关拉起的 ACP 子进程是全新 DSH 实例，只能看到 `~/.dsh/.credentials.yaml` 里的
-  `deepseek-account-platform/default` 这类 grant，看不到桌面端登录态的模型路由 →
-  **手机上发消息会明确报错**（不是静默失败）。
-  三条出路：① 给网关注入 `DEEPSEEK_API_KEY`；② 桌面端「模型」页配该路由；③ 改走 Web 层（复活 DESIGN 否决的三条风险）。
-  详见 `mobile-gateway/docs/cases/2026-10-30-dsh-mobile-app.md` §9.4。**需要用户拍板，别自己选。**
-- 真机（红米 K80）仍未装过一次；防火墙放行、同 Wi-Fi 未验。
-- `agent_message_chunk` 的**真实文本**样本仍然没有（被上面的密钥问题挡在门外）。
-
-### 安全提醒
-
-- 排查凭据时用 `sed` 想脱敏，但对 `refs:` 里的多行 JSON 字符串无效，**真实 token 已被打印进会话记录**
-  （QODERCN / ZCODE / MINIMAX / WORKBUDDY / BUDDY 等账号）。建议按需轮换，至少别再往外贴会话日志。
-- 测试期间在 `~/.dsh/mobile-gateway/devices.json` 生成过一台 `e2e-smoke` 设备，已删除；
-  现在该目录只剩自动生成的配置，首次启动会正常打配对码。
-
----
-
-## 快照：2026-10-30 20:30–20:40（手机端 App 搬进仓库 + APK 构建通过）
-
-### 用户要求
-
-> 「接着往下继续做」（上一轮停在：网关 85 条测试通过、Android 代码写完，但工程还在沙箱里、APK 没构建）
-
-### 改了什么
-
-| 改动 | 落点 |
-| --- | --- |
-| 工程从沙箱搬进仓库 | `state/slang-agent/mobile-gateway/` → **`mobile-gateway/`**（排除 `android/app/build`、`.gradle`、`.kotlin`，62MB → 397KB） |
-| 新增子工程 `.gitignore` | 忽略 `node_modules/`、Android 构建产物、`local.properties`、`*.apk`、`_dbg.*` |
-| 修 flaky 用例 | `mobile-gateway/test/acp-client.test.js`：超时用例自己撑住事件循环（详见 PITFALLS 新条目「测试『通过』了，其实是被判 cancelled」） |
-| 修 2 处 Kotlin 编译错误 | `android/.../ui/ChatViewModel.kt`：`put("announceMode", mode)` → `put(..., JsonPrimitive(mode))`，补 import |
-| 目录索引登记 | `docs/FOLDER_MAP.md` 新增 `mobile-gateway/` 一行 |
-| 路线登记 | `docs/ROADMAP.md` §3 新增候选 **F**（收益/成本/风险/回滚四列已补）、§2 追加里程碑条目 |
-| case 文档收尾 | `mobile-gateway/docs/cases/2026-10-30-dsh-mobile-app.md` 补 §6 真实构建结果、§7 上真机三步、§8 本轮续做记录 |
-
-### 已验证
-
-- `cd mobile-gateway && node test/run-all.js` → **tests 85 / pass 85 / fail 0 / cancelled 0**，连跑 3 次稳定。
-- `gradle assembleDebug`（JDK21 + SDK 在 `D:\dsh-android`）→ **BUILD SUCCESSFUL in 47s**。
-- 产物：`android/app/build/outputs/apk/debug/app-debug.apk`（17,436,189 字节，gitignore）；
-  副本 `mobile-gateway/app-debug-0.1.0.apk`（同样被 `*.apk` 忽略，纯粹方便装机）。
-- `aapt2 dump badging` → `package name='com.dsh.mobile' versionName='0.1.0' minSdkVersion='26' targetSdkVersion='35'`。
-
-### 没验证 / 交接
-
-- **真机（红米 K80）一次都没跑过**：没装、没配对、没发过消息。下一步按 case 文档 §7 的三步走。
-- **ACP `agent_message_chunk` 运行期样本**仍缺（只在真进程里出现，沙箱跑不出来）。
-- **手机录音上传**未实现：`gateway-sherpa` 这条 ASR 路只到接口，App 里点麦克风会提示「请先切到手机本地转写」（有意为之的诚实失败）。
-- **火山 TTS** 按用户要求「先跳过」，只留接口与结构化报错。
-- 网关端口/防火墙：手机与电脑需同一局域网，防火墙要放行，具体端口见 `mobile-gateway/src/config.js`。
-- 本次**不动根 `package.json`、不改版本号**：`mobile-gateway/` 是独立子工程，不参与 `npm test` / `test:audit`。
 
 ---
 

@@ -88,6 +88,41 @@ test('a message between snapshot and wait is returned without duplicate snapshot
   assert.equal(st.unread.length, 2, 'visibility never acknowledges messages');
 }));
 
+test('messages 等待要交回「本轮开始后、wait 之前」到的消息，而不是等下一轮再投', () => fixture(async ({ h, key, st, request, append }) => {
+  // 本轮 snapshot 里已有一条（模型看过、水位=1），并标记本回合正在进行
+  await h.ensureSession(key);
+  append('snapshot message');
+  await h.sendWakePromptV2(key, 'question');
+  h.v2TurnStartAt.set(h.state.sessions[key], Date.now());
+  // 模型还在跑本轮，这条到了 —— 属于 unread，但本轮还没看过
+  append('arrived while this turn was running');
+  const started = Date.now();
+  const result = await request('wait', { purpose: 'messages', timeoutMs: 1500, minNewMessages: 1, quietMs: 10 });
+  assert.equal(result.data.arrived, true, '本轮期间到的消息必须立刻交给当前回合');
+  assert.ok(Date.now() - started < 600, `wait 不该干等到超时（实际 ${result.data.waitedMs}ms）`);
+  assert.deepEqual(result.data.newMessages.map((m) => m.seq), [2], '只补未看过的第 2 条');
+  assert.equal(result.data.readThroughSeq, 2);
+}));
+
+test('工具返回要带 unseenCount/unreadNotice，提醒模型本轮还有没看的消息', () => fixture(async ({ h, key, st, request, get, append }) => {
+  await h.ensureSession(key);
+  append('snapshot message');
+  await h.sendWakePromptV2(key, 'question');
+  h.v2TurnStartAt.set(h.state.sessions[key], Date.now());
+  await request('unread'); // 模型看过第 1 条
+  append('arrived while running'); // 本轮期间到达，未看
+  const state = await get('state');
+  assert.equal(state.data.unseenCount, 1, 'state 要给出本轮没看过的条数');
+  assert.ok(/qq_wait_for_messages/.test(String(state.data.unreadNotice)), '提示模型可以现在就调 wait');
+  // wait 取走后，未看提醒应消失（但消息仍留在 unread，直到 mark_read）
+  const w = await request('wait', { purpose: 'messages', timeoutMs: 800, minNewMessages: 1, quietMs: 10 });
+  assert.deepEqual(w.data.newMessages.map((m) => m.seq), [2]);
+  const after = await get('state');
+  assert.equal(after.data.unseenCount, undefined, '看过之后不再提示');
+  const recent = await get('recent');
+  assert.ok((recent.data.messages ?? []).some((m) => m.seq === 2), 'recent 也能看到本轮期间到的消息');
+}));
+
 test('each supplement restarts quiet from its actual arrival, and appears exactly once', () => fixture(async ({ st, request, append }) => {
   append('first');
   await request('unread');

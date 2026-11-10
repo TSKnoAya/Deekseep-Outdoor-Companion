@@ -7,7 +7,7 @@
 
 | | |
 | --- | --- |
-| 版本 | `0.7.23` |
+| 版本 | `0.8.8` |
 | 目标 DSH | `0.2.1-rc.2 或更新（rc.3 已能安装，功能未完整回归）`（`npm run verify:adaptation` 可逐项复核） |
 | 平台 | Windows（沙箱 ACL / SnowLuma / 启动脚本都与它绑定） |
 | 许可 | MIT（SnowLuma 是第三方专有运行时，**不随本仓库分发**） |
@@ -18,41 +18,11 @@
 
 ---
 
-## 关于本仓库：一个基于 SurfCore 的手机网关扩展
-
-本仓库以 [SurfCore](https://github.com/Mieksido/surfcore) 为基础，主要新增了 [`mobile-gateway/`](mobile-gateway/)：
-把养鱼插件里的**角色人格与记忆**带到手机上（本机网关 + Android App），SurfCore 原有的 QQ / B站 / 桌宠能力保持不变。
-
-需要说清楚的一点：**`mobile-gateway` 本身不提供养鱼功能**。它不自带角色、不自带记忆，
-所有「鱼」都来自正在运行的养鱼插件 —— **至少要装一款**，否则手机端只是一个普通助手。
-当前适配的是 SurfCore：网关读的是它的角色目录（`~/.dsh/surfcore/characters/` 下的
-`current.json`、`persona.md`、`memory-card-prompt-*.md`），支持自动跟随桌面当前角色，也支持在手机端固定选一条。
-
-我们希望把这层适配做成通用的：
-
-- 欢迎更多「养大肥鱼」类插件的作者一起做兼容。重点是把 [`mobile-gateway/src/fish-context.js`](mobile-gateway/src/fish-context.js)
-  里「读哪个角色、读哪份记忆」抽成适配层；注入策略（首轮注入、记忆变更后再注入、每会话上限、手机固定选鱼）
-  与具体插件无关，可以直接复用。
-- 你的插件如果角色/记忆目录结构不同，欢迎开 Issue 描述格式，或直接提 PR 加一个 adapter。
-- 目标：手机端只依赖「一款养鱼插件」，而不依赖某个特定品牌。
-
-上游与许可：SurfCore（[Mieksido/surfcore](https://github.com/Mieksido/surfcore)）· 更上游 qq-bridge / QSH（Derpyu520 等）；
-具体条款见 [LICENSE](LICENSE)（MIT）。手机网关用到的第三方素材与代码依赖署名见
-[mobile-gateway/THIRD_PARTY_NOTICES.md](mobile-gateway/THIRD_PARTY_NOTICES.md)。
-
-> **语音包不随本仓库分发（重要）**：仓库里只保留语音后端的**接口**（`src/voice/`、
-> `mobile-gateway/src/voice/`：云端 TTS、本地 TTS 占位、手机系统 TTS），
-> 任何语音包（参考音频、TTS/ASR 模型、个人音色）都**不进仓库**，需要用户自行准备。
-> 原因：本地 GPT-SoVITS 语音包约 **11GB**，且包含个人音色素材与第三方许可限制。
-> 手机端想用声音：云端 TTS（0MB，需联网与密钥）、系统 TTS（0MB），或把合成留在电脑上（0MB）。
-
----
-
 ## 让 DSH 自己装（也可以只发一条链接）
 
 把这句话发给 DSH：
 
-> 帮我安装 https://github.com/TSKnoAya/Deekseep-Outdoor-Companion ，按 README 的步骤来。
+> 帮我安装 https://github.com/Mieksido/surfcore ，按 README 的步骤来。
 
 **顺序很重要**（DSH 常常先 install_bundle、后装依赖，结果激活时报 `Cannot find module '@deepseek-ai/schemastery'`）：
 
@@ -72,7 +42,7 @@
 ## 第一次装（4 条命令）
 
 ```powershell
-git clone --depth 1 https://github.com/TSKnoAya/Deekseep-Outdoor-Companion.git
+git clone --depth 1 https://github.com/Mieksido/surfcore.git
 cd surfcore
 npm install
 node scripts/setup-dsh.mjs      # 自动判断 DSH 用的 profile，不用填
@@ -80,7 +50,7 @@ node scripts/setup-dsh.mjs      # 自动判断 DSH 用的 profile，不用填
 
 重启 DSH → 设置 → SurfCore → **诊断 → 一键安装（全部）**（自动发现 SnowLuma、写白名单、起桥接）。
 
-> 不想敲命令：`powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/TSKnoAya/Deekseep-Outdoor-Companion/main/scripts/bootstrap.ps1 | iex"`
+> 不想敲命令：`powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/Mieksido/surfcore/main/scripts/bootstrap.ps1 | iex"`
 
 前置：Windows + Node ≥22.13 + DSH 0.2.1-rc.2 或更新（rc.3 已能安装，功能未完整回归） + SnowLuma（第三方，需自己装并扫码）。详见 [INSTALL.md](docs/guides/INSTALL.md)。
 
@@ -143,7 +113,7 @@ node scripts/setup-dsh.mjs      # 自动判断 DSH 用的 profile，不用填
 
 ```bash
 # 1) 取代码
-git clone https://github.com/TSKnoAya/Deekseep-Outdoor-Companion.git
+git clone https://github.com/Mieksido/surfcore.git
 cd surfcore
 
 # 2) 装依赖（postinstall 会自动修补 @snowluma/sdk 的 ESM bug）

@@ -92,6 +92,7 @@ function copyFile(src, dest) {
 function copyPersonaLayers(paths, fixtureRoot) {
   copyFile(paths.persona, path.join(fixtureRoot, 'persona.md'));
   copyFile(paths.personaDaily, path.join(fixtureRoot, 'persona.daily.md'));
+  copyFile(paths.personaTone, path.join(fixtureRoot, 'persona.tone.md'));
   for (const [scene, file] of Object.entries(paths.personaScenes || {})) {
     copyFile(file, path.join(fixtureRoot, 'persona.scenes', `${scene}.md`));
   }
@@ -135,6 +136,7 @@ export function characterPaths(id) {
     manifest: path.join(dir, 'character.json'),
     persona: path.join(dir, 'persona.md'),
     personaDaily: path.join(dir, 'persona.daily.md'),
+    personaTone: path.join(dir, 'persona.tone.md'),
     personaScenesDir: path.join(dir, 'persona.scenes'),
     personaScenes: {
       'qq-group': path.join(dir, 'persona.scenes', 'qq-group.md'),
@@ -219,7 +221,16 @@ export function readPersonaLayerText(kind = 'core', scene = '') {
     ? layers.daily
     : kind === 'scene'
       ? (layers.scenes?.[scene] || '')
-      : layers.core;
+      : kind === 'tone'
+        ? layers.tone
+        : kind === 'core'
+          ? layers.core
+          : (() => {
+            try {
+              console.warn(`[persona] 未知人格层 "${kind}"，回退核心；请检查调用方`);
+            } catch {}
+            return layers.core;
+          })();
   try { return file ? fs.readFileSync(file, 'utf8') : ''; } catch { return ''; }
 }
 
@@ -232,6 +243,7 @@ export function activePersonaLayers() {
     id: cur.id,
     core: p.persona,
     daily: p.personaDaily,
+    tone: p.personaTone,
     scenesDir: p.personaScenesDir,
     scenes: p.personaScenes,
   };
@@ -607,6 +619,7 @@ export function restoreSnapshot(id, slot, { now = Date.now() } = {}) {
   const before = snapshotCharacter(id, { slot: `pre-restore-${new Date(now).toISOString().replace(/[:.]/g, '-')}`, reason: 'before-restore', now });
   copyFile(path.join(source, 'persona.md'), paths.persona);
   copyFile(path.join(source, 'persona.daily.md'), paths.personaDaily);
+  copyFile(path.join(source, 'persona.tone.md'), paths.personaTone);
   try {
     for (const entry of fs.readdirSync(path.join(source, 'persona.scenes'), { withFileTypes: true })) {
       if (!entry.isFile() || !entry.name.endsWith('.md')) continue;

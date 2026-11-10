@@ -25,7 +25,7 @@ global.fetch = async (url) => {
 
 const svc = createUpdatesService({
   stateDir,
-  components: () => [{ id: 'surfcore', name: 'SurfCore 本体', dir: pkgDir, kind: 'git', branch: 'main', versionRepo: 'TSKnoAya/Deekseep-Outdoor-Companion' }],
+  components: () => [{ id: 'surfcore', name: 'SurfCore 本体', dir: pkgDir, kind: 'git', branch: 'main', versionRepo: 'Mieksido/surfcore' }],
   pluginLog: () => {},
 });
 
