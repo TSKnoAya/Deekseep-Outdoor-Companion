@@ -4002,28 +4002,34 @@ npm run test:audit
 - **修法**：补 `proxyDshFollowDefault` + 路由；新增静态契约测试，钉住前端路径 ⊆ 宿主路由。
 - **教训**：**中间代理层也是接口**；桥接新增一条路由，宿主必须同步开代理，否则前端只能 404。
 
-## 这台机器的 GitHub 通道：PAC 在 12223，真代理 9910，且必须走 HTTP/1.1
+## 这台机器的 GitHub 通道：PAC 在 12223，真代理 9910；「网络不通」是一次误判
 
-排查过一次很绕的「git push 推不上去」，结论是**两个独立原因叠在一起**：
+2026-11-10 排查过一次很绕的「git push 推不上去」。**用户的代理从 07:30 起一直开着，
+浏览器始终能打开 github.com**；所谓「网络不通」只是我这条命令行 shell 的 git 通道问题，
+不是机器断网、也不是被墙。把命令行报错概括成「网络不通」是不准确的，别再这么下结论。
 
-- **现象 A**：`git ls-remote` 报 `CONNECT tunnel failed, response 502`，
-  但浏览器能正常打开 github.com。
-  原因：当时 git 没有任何代理配置，于是用了 shell 里的 `http_proxy=127.0.0.1:9426`
-  —— 那个端口只放行少数域名（api.github.com、codeload 通，github.com 不通）。
+**稳定成立的事实**
 
-- **现象 B**：改用真代理 9910 之后，变成 `Recv failure: Connection was reset`。
-  原因：**9910 这个代理不接受 git 默认的 HTTP/2 协商**，加 `http.version=HTTP/1.1` 就好。
-  这一步最容易被误判成"网络不通/被墙"，其实是协议协商被 reset。
+- Windows 代理是 PAC：`HKCU\...\Internet Settings\AutoConfigURL =
+  http://127.0.0.1:12223/proxy.pac`，内容只有一句 `return "PROXY 127.0.0.1:9910"`。
+- 浏览器读 PAC，所以能上；**curl / git 不读 PAC**，必须显式给 `-x` / `http.proxy`。
+- 我的 shell 被工具链注入了 `http_proxy=127.0.0.1:9426`（另一个本地端口），
+  与 PAC 指向的 9910 不是同一条通道。
+- **优先级（纠正过一次想当然）**：git 自己的 `http.proxy`（`-c` 或全局配置）
+  **优先于** `http_proxy` 环境变量，`-c` 更是如此。曾误写成「env 覆盖了 -c 参数」，是错的。
 
-- **Windows 的代理是 PAC**：`HKCU\...\Internet Settings\AutoConfigURL =
-  http://127.0.0.1:12223/proxy.pac`，PAC 内容只有一句 `return "PROXY 127.0.0.1:9910"`。
-  浏览器读 PAC，所以能上；curl/git 不读 PAC，所以不能。
+**当时的瞬时现象（后来复测已不复现，别当成固定规则）**
 
-- **优先级（实测纠正过一次想当然）**：git 自己的 `http.proxy`（`-c` 或全局配置）
-  **优先于** `http_proxy` 环境变量。所以配好之后，即使 env 里还是那个坏的 9426，
-  git 依然能通。
+| 当时的报错 | 当时给的临时解释 |
+|---|---|
+| `CONNECT tunnel failed, response 502` | 9426 对 github.com 的 git 智能 HTTP 不通 |
+| `Recv failure: Connection was reset` | 9910 上 HTTP/2 协商被 reset，加 HTTP/1.1 后通 |
 
-**最终配置**（已写入全局，机器上所有仓库生效）：
+2026-11-10 08:10 复测四种组合——`9910` / `9426` × `HTTP/1.1` / `HTTP/2`——
+`git ls-remote origin` **全部成功**。说明上面两条是代理当时的瞬时状态（节点 / 规则 / 连接），
+不是端口或协议的固有能力限制。**不要再写「9426 只放行少数域名」或「9910 必须 HTTP/1.1」**。
+
+**最终配置**（已写入全局，机器上所有仓库生效；HTTP/1.1 保留为保守兜底）：
 
 ```bash
 git config --global http.proxy http://127.0.0.1:9910
@@ -4031,4 +4037,5 @@ git config --global http.version HTTP/1.1
 ```
 
 **判断顺序**（省时间）：先看 PAC（`AutoConfigURL`）→ `curl -x <port> https://github.com/`
-→ 再试 git；若 git 报 reset，先加 `-c http.version=HTTP/1.1` 再怀疑网络。
+→ 再试 git；git 失败时先换端口、再试 `-c http.version=HTTP/1.1`，
+**不要直接下「网络不通」的结论**。
